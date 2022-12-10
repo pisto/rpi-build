@@ -1,7 +1,7 @@
 ARG BASE_IMAGE=localhost/archlinuxarm/rpi-armv7-import:latest
 
 FROM $BASE_IMAGE AS pacman-init
-RUN pacman-key --init && pacman-key --populate && pacman -Sy
+RUN pacman-key --init && pacman-key --populate archlinuxarm && pacman -Sy
 
 FROM pacman-init AS raspi-overlayroot
 RUN pacman -S --noconfirm binutils fakeroot
