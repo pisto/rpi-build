@@ -1,0 +1,32 @@
+#!/bin/bash
+
+set -xeuo pipefail
+
+./sd-umount
+sudo fdisk "${MEMORY_CARD_DEVICE}" <<EOF
+o
+n
+p
+1
+
++200M
+t
+c
+n
+p
+2
+
+
+w
+EOF
+sudo mkfs.vfat "${MEMORY_CARD_DEVICE}"p1
+sudo mkfs.ext4 -F "${MEMORY_CARD_DEVICE}"p2
+mountdir="mounts/$(basename "${MEMORY_CARD_DEVICE}")"
+sudo mount "${MEMORY_CARD_DEVICE}"p2 "${mountdir}"
+sudo mkdir "${mountdir}"/boot
+sudo mount "${MEMORY_CARD_DEVICE}"p1 "${mountdir}"/boot
+container="$(podman create localhost/archlinuxarm/rpi-armv7:latest)"
+trap 'podman rm "${container}"' EXIT
+podman export "${container}" | sudo tar x -C "${mountdir}"
+./sd-umount
+./sd-mount

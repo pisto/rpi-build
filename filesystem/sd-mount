@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -euo pipefail
+
+./sd-umount
+mountdir="mounts/$(basename "${MEMORY_CARD_DEVICE}")"
+mkdir -p "${mountdir}"
+sudo mount "${MEMORY_CARD_DEVICE}"p2 "${mountdir}"
+sudo mount "${MEMORY_CARD_DEVICE}"p1 "${mountdir}"/boot
