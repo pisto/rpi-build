@@ -28,5 +28,3 @@ sudo mount "${MEMORY_CARD_DEVICE}"p1 "${mountdir}"/boot
 container="$(podman create localhost/archlinuxarm/rpi-armv7:latest)"
 trap 'podman rm "${container}" > /dev/null' EXIT
 podman export "${container}" | sudo tar x -C "${mountdir}"
-./sd-umount
-./sd-mount
