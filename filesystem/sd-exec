@@ -1,0 +1,6 @@
+#!/bin/bash
+
+set -euo pipefail
+
+mountdir="mounts/$(basename "${MEMORY_CARD_DEVICE}")"
+sudo systemd-nspawn -qD "${mountdir}" --console=autopipe --bind-ro=/usr/lib/systemd/resolv.conf:/etc/resolv.conf "$@"
