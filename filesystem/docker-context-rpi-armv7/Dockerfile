@@ -10,6 +10,8 @@ COPY --chown=nobody:nobody raspi-overlayroot /opt/raspi-overlayroot
 RUN cd /opt/raspi-overlayroot && makepkg -d
 
 FROM pacman-init
+RUN pacman -Sy --noconfirm mkinitcpio linux-rpi; \
+  mv /boot/cmdline.txt.pacnew /boot/cmdline.txt; mv /boot/config.txt.pacnew /boot/config.txt; mv /etc/mkinitcpio.conf.pacnew /etc/mkinitcpio.conf; true
 RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 overlayroot)/;s/^ *MODULES=(\(.*\)) *$/MODULES=(\1 overlay)/' /etc/mkinitcpio.conf \
  && sed -i 's/ rw / ro /;s/$/ overlayroot/' /boot/cmdline.txt \
  && sed -i 's/ defaults / defaults,ro /' /etc/fstab
@@ -17,8 +19,8 @@ RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 overlayroot)/;s/^ *MODULES=(\(.*\))
 # 12/13 -> MH-Z19 TX/RX
 # 18    -> PWM0
 RUN sed -i 's/[^ ]*=serial0[^ ]* *//g' /boot/cmdline.txt \
- && echo $'\n[all]\ndhtoverlay=dht11\ndhtoverlay=pwm' >> /boot/config.txt
-RUN --mount=type=bind,from=raspi-overlayroot,source=/opt/raspi-overlayroot,destination=/opt/raspi-overlayroot pacman -U --noconfirm /opt/raspi-overlayroot/overlayroot-*.pkg.* && pacman -S --noconfirm podman
+ && echo $'\n[all]\ndtoverlay=dht11\ndtoverlay=pwm' >> /boot/config.txt
+RUN --mount=type=bind,from=raspi-overlayroot,source=/opt/raspi-overlayroot,destination=/opt/raspi-overlayroot pacman -U --noconfirm /opt/raspi-overlayroot/overlayroot-*.pkg.*
 
 ENTRYPOINT [ "/bin/bash" ]
 WORKDIR /root
