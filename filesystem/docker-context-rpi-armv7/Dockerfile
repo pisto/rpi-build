@@ -15,11 +15,6 @@ RUN pacman -Sy --noconfirm mkinitcpio linux-rpi; \
 RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 overlayroot)/;s/^ *MODULES=(\(.*\)) *$/MODULES=(\1 overlay)/' /etc/mkinitcpio.conf \
  && sed -i 's/ rw / ro /;s/$/ overlayroot/' /boot/cmdline.txt \
  && sed -i 's/ defaults / defaults,ro /' /etc/fstab
-# 4     -> DHT11
-# 12/13 -> MH-Z19 TX/RX
-# 18    -> PWM0
-RUN sed -i 's/[^ ]*=serial0[^ ]* *//g' /boot/cmdline.txt \
- && echo $'\n[all]\ndtoverlay=dht11\ndtoverlay=pwm' >> /boot/config.txt
 RUN --mount=type=bind,from=raspi-overlayroot,source=/opt/raspi-overlayroot,destination=/opt/raspi-overlayroot pacman -U --noconfirm /opt/raspi-overlayroot/overlayroot-*.pkg.*
 
 ENTRYPOINT [ "/bin/bash" ]
