@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -xeuo pipefail
+set -euo pipefail
 
 ./sd-umount
 sudo fdisk "${MEMORY_CARD_DEVICE}" <<EOF
@@ -25,17 +25,17 @@ mountdir="mounts/$(basename "${MEMORY_CARD_DEVICE}")"
 sudo mount "${MEMORY_CARD_DEVICE}"p2 "${mountdir}"
 sudo mkdir "${mountdir}"/boot
 sudo mount "${MEMORY_CARD_DEVICE}"p1 "${mountdir}"/boot
-container="$(podman create localhost/archlinuxarm/rpi-armv7:latest)"
+container="$(podman create ${IMAGE:-localhost/archlinuxarm/rpi-armv7:latest})"
 trap 'podman rm "${container}" > /dev/null' EXIT
 podman export "${container}" | sudo tar x -C "${mountdir}"
 
-./sd-exec bash -xc '
+./sd-exec bash -c '
 systemd-machine-id-setup
 ssh-keygen -A
 '
 
 [[ -f ~/.ssh/id_rsa.pub ]] || exit
-./sd-exec bash -xc < ~/.ssh/id_rsa.pub '
+./sd-exec bash -c < ~/.ssh/id_rsa.pub '
 passwd -d root
 passwd -l root
 passwd -d alarm
@@ -43,7 +43,7 @@ passwd -l alarm
 umask 077
 mkdir -p ~/.ssh
 exec cat > ~/.ssh/authorized_keys'
-./sd-exec su alarm -xc < ~/.ssh/id_rsa.pub '
+./sd-exec su alarm -c < ~/.ssh/id_rsa.pub '
 umask 077
 mkdir -p ~/.ssh
 exec cat > ~/.ssh/authorized_keys'
