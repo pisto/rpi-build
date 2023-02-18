@@ -14,6 +14,8 @@ RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 overlayroot)/;s/^ *MODULES=(\(.*\))
  && sed -i 's/ rw / ro /;s/$/ overlayroot/' /boot/cmdline.txt \
  && sed -i 's/ defaults / defaults,ro /' /etc/fstab
 RUN --mount=type=bind,from=raspi-overlayroot,source=/opt/raspi-overlayroot,destination=/opt/raspi-overlayroot pacman -U --noconfirm /opt/raspi-overlayroot/overlayroot-*.pkg.*
+# newer systemd renames eth0 into enu1u1.network
+COPY enu1u1.network /etc/systemd/network/
 
 ENTRYPOINT [ "/bin/bash" ]
 WORKDIR /root
