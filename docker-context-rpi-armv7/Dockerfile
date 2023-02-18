@@ -1,7 +1,7 @@
 ARG BASE_IMAGE=localhost/archlinuxarm/rpi-armv7-import:latest
 
 FROM $BASE_IMAGE AS pacman-init
-RUN pacman-key --init && pacman-key --populate archlinuxarm && pacman -Sy
+RUN pacman-key --init && pacman-key --populate archlinuxarm && pacman -Syu --noconfirm
 
 FROM pacman-init AS raspi-overlayroot
 RUN pacman -S --noconfirm binutils fakeroot
@@ -10,8 +10,6 @@ COPY --chown=nobody:nobody raspi-overlayroot /opt/raspi-overlayroot
 RUN cd /opt/raspi-overlayroot && makepkg -d
 
 FROM pacman-init
-RUN pacman -Sy --noconfirm mkinitcpio linux-rpi; \
-  mv /boot/cmdline.txt.pacnew /boot/cmdline.txt; mv /boot/config.txt.pacnew /boot/config.txt; mv /etc/mkinitcpio.conf.pacnew /etc/mkinitcpio.conf; true
 RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 overlayroot)/;s/^ *MODULES=(\(.*\)) *$/MODULES=(\1 overlay)/' /etc/mkinitcpio.conf \
  && sed -i 's/ rw / ro /;s/$/ overlayroot/' /boot/cmdline.txt \
  && sed -i 's/ defaults / defaults,ro /' /etc/fstab
