@@ -13,4 +13,4 @@ fi
 # extract date from gzip header
 date="$(date --date=@"$(dd status=none bs=4 skip=1 count=1 < ArchLinuxARM-rpi-armv7-latest.tar.gz | od -t u4 -An | grep -Eo '[0-9]*')" -I)"
 podman import --arch arm/v7 --os linux "${archive}" localhost/archlinuxarm/rpi-armv7-import:"${date}" -c LABEL=org.opencontainers.image.base.name="${AARCH_URL}" -c LABEL=org.opencontainers.image.base.date="${date}" -c LABEL=org.opencontainers.image.base.digest="$(cut -f 1 -d ' ' <<< "${md5}")"
-podman build -t localhost/archlinuxarm/rpi-armv7 docker-context-rpi-armv7 --build-arg BASE_IMAGE=localhost/archlinuxarm/rpi-armv7-import:"${date}"
+podman build --cap-add=CAP_SYS_CHROOT -t localhost/archlinuxarm/rpi-armv7 docker-context-rpi-armv7 --build-arg BASE_IMAGE=localhost/archlinuxarm/rpi-armv7-import:"${date}"
