@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ./sd-umount
-sudo fdisk "${MEMORY_CARD_DEVICE}" <<EOF
+sudo fdisk -w always -W always "${MEMORY_CARD_DEVICE}" <<EOF
 o
 n
 p
@@ -16,11 +16,17 @@ n
 p
 2
 
++4G
+n
+p
+3
+
 
 w
 EOF
 sudo mkfs.vfat "${MEMORY_CARD_DEVICE}"p1
 sudo mkfs.ext4 -F "${MEMORY_CARD_DEVICE}"p2
+sudo mkfs.f2fs -l mutable "${MEMORY_CARD_DEVICE}"p3
 mountdir="mounts/$(basename "${MEMORY_CARD_DEVICE}")"
 sudo mount "${MEMORY_CARD_DEVICE}"p2 "${mountdir}"
 sudo mkdir "${mountdir}"/boot
