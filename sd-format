@@ -40,6 +40,8 @@ podman export "${container}" | sudo tar x -C "${mountdir}"
 ./sd-exec bash -c '
 systemd-machine-id-setup
 ssh-keygen -A
+mkdir /mnt/mutable/timesync
+chown systemd-timesync:systemd-timesync /mnt/mutable/timesync
 '
 
 [[ -f ~/.ssh/id_rsa.pub ]] || exit

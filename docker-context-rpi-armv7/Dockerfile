@@ -22,7 +22,7 @@ RUN echo '/dev/mmcblk0p3  /mnt/mutable f2fs defaults,noauto 0 0' >> /etc/fstab
 # make systemd-timesync almost persistent across reboots
 RUN mkdir /var/lib/systemd/timesync \
   && chown systemd-timesync:systemd-timesync /var/lib/systemd/timesync \
-  && echo '/mnt/mutable /var/lib/systemd/timesync none x-systemd.requires=/mnt/mutable,noauto,bind 0 0' >> /etc/fstab
+  && echo '/mnt/mutable/timesync /var/lib/systemd/timesync none x-systemd.requires=/mnt/mutable,noauto,bind 0 0' >> /etc/fstab
 COPY systemd-timesyncd-override.conf /etc/systemd/system/systemd-timesyncd.service.d/override.conf
 
 ENTRYPOINT [ "/bin/bash" ]
