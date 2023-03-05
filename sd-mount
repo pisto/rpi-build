@@ -7,4 +7,5 @@ mountdir="mounts/$(basename "${MEMORY_CARD_DEVICE}")"
 mkdir -p "${mountdir}"
 sudo mount "${MEMORY_CARD_DEVICE}"p2 "${mountdir}"
 sudo mount "${MEMORY_CARD_DEVICE}"p1 "${mountdir}"/boot
+sudo mount "${MEMORY_CARD_DEVICE}"p3 "${mountdir}"/mnt/mutable
 echo "$(realpath "${mountdir}")"

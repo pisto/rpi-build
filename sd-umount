@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+if findmnt "${MEMORY_CARD_DEVICE}"p3 > /dev/null; then
+  sudo umount "${MEMORY_CARD_DEVICE}"p3
+fi
 if findmnt "${MEMORY_CARD_DEVICE}"p1 > /dev/null; then
   sudo umount "${MEMORY_CARD_DEVICE}"p1
 fi
