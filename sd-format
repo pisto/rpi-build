@@ -26,7 +26,7 @@ w
 EOF
 sudo mkfs.vfat "${MEMORY_CARD_DEVICE}"p1
 sudo mkfs.ext4 -F "${MEMORY_CARD_DEVICE}"p2
-sudo mkfs.f2fs -l mutable "${MEMORY_CARD_DEVICE}"p3
+sudo mkfs.f2fs -f -l mutable "${MEMORY_CARD_DEVICE}"p3
 mountdir="mounts/$(basename "${MEMORY_CARD_DEVICE}")"
 sudo mount "${MEMORY_CARD_DEVICE}"p2 "${mountdir}"
 sudo mkdir -p "${mountdir}"/boot "${mountdir}"/mnt/mutable
