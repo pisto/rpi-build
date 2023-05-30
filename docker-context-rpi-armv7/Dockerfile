@@ -26,6 +26,7 @@ RUN mkdir /var/lib/systemd/timesync \
   && chown systemd-timesync:systemd-timesync /var/lib/systemd/timesync \
   && echo '/mnt/mutable/timesync /var/lib/systemd/timesync none x-systemd.requires=/mnt/mutable,noauto,bind 0 0' >> /etc/fstab
 COPY systemd-timesyncd-override.conf /etc/systemd/system/systemd-timesyncd.service.d/override.conf
-
+# entrypoint
+RUN systemctl set-default multi-user.target
 ENTRYPOINT [ "/bin/bash" ]
 WORKDIR /root
