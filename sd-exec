@@ -3,4 +3,5 @@
 set -euo pipefail
 
 mountdir="mounts/$(basename "${MEMORY_CARD_DEVICE}")"
-sudo systemd-nspawn -qD "${mountdir}" --console=autopipe --bind-ro=/usr/lib/systemd/resolv.conf:/etc/resolv.conf "$@"
+uname="$(shopt -s nullglob; basename "${mountdir}"/usr/lib/modules/*)"
+sudo systemd-nspawn -qD "${mountdir}" -E QEMU_UNAME="$uname" -E QEMU_CPU=cortex-a7 --console=autopipe --bind-ro=/usr/lib/systemd/resolv.conf:/etc/resolv.conf "$@"
