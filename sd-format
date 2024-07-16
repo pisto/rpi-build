@@ -30,8 +30,7 @@ sudo mkfs.f2fs -f -l mutable "${MEMORY_CARD_DEVICE}"p3
 mountdir="mounts/$(basename "${MEMORY_CARD_DEVICE}")"
 sudo mount "${MEMORY_CARD_DEVICE}"p2 "${mountdir}"
 sudo mkdir -p "${mountdir}"/boot "${mountdir}"/mnt/mutable
-sudo mount "${MEMORY_CARD_DEVICE}"p1 "${mountdir}"/boot
-sudo mount "${MEMORY_CARD_DEVICE}"p3 "${mountdir}"/mnt/mutable
+./sd-mount
 sudo chmod 1777 "${mountdir}"/mnt/mutable
 container="$(podman create ${IMAGE:-localhost/archlinuxarm/rpi-armv7:latest})"
 trap 'podman rm "${container}" > /dev/null' EXIT

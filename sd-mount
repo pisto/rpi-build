@@ -8,4 +8,9 @@ mkdir -p "${mountdir}"
 sudo mount "${MEMORY_CARD_DEVICE}"p2 "${mountdir}"
 sudo mount "${MEMORY_CARD_DEVICE}"p1 "${mountdir}"/boot
 sudo mount "${MEMORY_CARD_DEVICE}"p3 "${mountdir}"/mnt/mutable
+sudo mkdir -p "${mountdir}"/mnt/host mounts/host
+sudo chown root:root mounts/host
+sudo chmod 1777 mounts/host
+sudo mount --bind mounts/host "${mountdir}"/mnt/host
+
 echo "$(realpath "${mountdir}")"
