@@ -1,0 +1,26 @@
+#!/bin/bash
+
+set -euo pipefail
+
+: "${RPI_ARCH:?must be set to armv7 or aarch64}"
+
+case "${RPI_ARCH}" in
+  armv7)   podman_arch=arm/v7 ;;
+  aarch64) podman_arch=arm64 ;;
+  *) echo "Unsupported RPI_ARCH: ${RPI_ARCH} (expected armv7 or aarch64)" 1>&2; exit 1 ;;
+esac
+
+build_date="$(date -u -Iseconds)"
+
+AARCH_URL="${AARCH_URL:-http://os.archlinuxarm.org/os/ArchLinuxARM-rpi-${RPI_ARCH}-latest.tar.gz}"
+archive="$(basename "${AARCH_URL}")"
+md5="$(< "${archive}".md5)"
+if [[ ! -f "${archive}" ]] || [[ "$(md5sum "${archive}")" != "${md5}" ]]; then
+  wget -O "${archive}" "${AARCH_URL}"
+  [[ "$(md5sum "${archive}")" == "${md5}" ]] || { echo "Bad checksum for ${archive}" 1>&2; exit 1; }
+fi
+
+# extract date from gzip header
+date="$(date --date=@"$(dd status=none bs=4 skip=1 count=1 < "${archive}" | od -t u4 -An | grep -Eo '[0-9]*')" -I)"
+podman import --arch "${podman_arch}" --os linux "${archive}" localhost/archlinuxarm/rpi:import-"${date}" -c ENTRYPOINT=/bin/bash -c LABEL=org.opencontainers.image.base.name="${AARCH_URL}" -c LABEL=org.opencontainers.image.base.date="${date}" -c LABEL=org.opencontainers.image.base.digest="$(cut -f 1 -d ' ' <<< "${md5}")"
+podman build --jobs=0 --arch "${podman_arch}" --os linux --cap-add=CAP_SYS_CHROOT -t localhost/archlinuxarm/rpi context --build-arg BASE_IMAGE=localhost/archlinuxarm/rpi:import-"${date}" --build-arg BUILD_DATE="${build_date}" --build-arg RPI_ARCH="${RPI_ARCH}"

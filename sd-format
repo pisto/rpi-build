@@ -2,37 +2,39 @@
 
 set -euo pipefail
 
+: "${RPI_ARCH:?must be set to armv7 or aarch64}"
+
+case "${RPI_ARCH}" in
+  armv7)   podman_arch=arm/v7 ;;
+  aarch64) podman_arch=arm64 ;;
+  *) echo "Unsupported RPI_ARCH: ${RPI_ARCH} (expected armv7 or aarch64)" 1>&2; exit 1 ;;
+esac
+
+# 4 MiB is the erase-block (allocation unit) size of essentially every consumer
+# SDHC/SDXC card; Linux has no reliable generic way to query it back (mmc_block's
+# preferred_erase_size sysfs attribute only exists for onboard SDHCI readers, not
+# USB ones, and optimal_io_size is normally left unreported as 0 by USB card
+# readers), so it's used directly to align ext4's own metadata via stride/stripe-
+# width. Partition alignment itself is handled below by `parted -a optimal`.
+au_bytes=$((4 * 1024 * 1024))
+au_ext4_blocks=$((au_bytes / 4096))
+
 ./sd-umount
-sudo fdisk -w always -W always "${MEMORY_CARD_DEVICE}" <<EOF
-o
-n
-p
-1
-
-+200M
-t
-c
-n
-p
-2
-
-+4G
-n
-p
-3
-
-
-w
-EOF
-sudo mkfs.vfat "${MEMORY_CARD_DEVICE}"p1
-sudo mkfs.ext4 -F "${MEMORY_CARD_DEVICE}"p2
-sudo mkfs.f2fs -f -l mutable "${MEMORY_CARD_DEVICE}"p3
+sudo parted -s -a optimal "${MEMORY_CARD_DEVICE}" \
+  mklabel msdos \
+  mkpart primary fat32 0% 300MiB \
+  mkpart primary ext4 300MiB 4396MiB \
+  mkpart primary 4396MiB 100%
+sudo mkfs.vfat "${MEMORY_CARD_DEVICE}"*1
+sudo mkfs.ext4 -F -E stride=${au_ext4_blocks},stripe-width=${au_ext4_blocks} "${MEMORY_CARD_DEVICE}"*2
+sudo mkfs.f2fs -f -l mutable "${MEMORY_CARD_DEVICE}"*3
 mountdir="mounts/$(basename "${MEMORY_CARD_DEVICE}")"
-sudo mount "${MEMORY_CARD_DEVICE}"p2 "${mountdir}"
+mkdir -p "${mountdir}"
+sudo mount "${MEMORY_CARD_DEVICE}"*2 "${mountdir}"
 sudo mkdir -p "${mountdir}"/boot "${mountdir}"/mnt/mutable
 ./sd-mount
 sudo chmod 1777 "${mountdir}"/mnt/mutable
-container="$(podman create ${IMAGE:-localhost/archlinuxarm/rpi-armv7:latest})"
+container="$(podman create --arch "${podman_arch}" --os linux "${IMAGE:-localhost/archlinuxarm/rpi:latest}")"
 trap 'podman rm "${container}" > /dev/null' EXIT
 podman export "${container}" | sudo tar x -C "${mountdir}"
 
@@ -42,6 +44,10 @@ ssh-keygen -A
 mkdir /mnt/mutable/timesync
 touch /mnt/mutable/timesync/clock
 chown -R systemd-timesync:systemd-timesync /mnt/mutable/timesync
+mkdir -p /mnt/mutable/log/journal
+chmod 0755 /mnt/mutable/log
+chown root:systemd-journal /mnt/mutable/log/journal
+chmod 2755 /mnt/mutable/log/journal
 '
 
 [[ -f ~/.ssh/id_rsa.pub ]] || exit

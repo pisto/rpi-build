@@ -1,0 +1,6 @@
+[Match]
+Type=ether
+Driver=bcmgenet
+
+[Link]
+AlternativeName=eth0

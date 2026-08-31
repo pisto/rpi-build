@@ -1,0 +1,76 @@
+ARG BASE_IMAGE
+
+FROM $BASE_IMAGE AS pacman-init
+ARG RPI_ARCH
+ENV QEMU_CPU=max
+# Landlock isn't available under qemu-user emulation, so pacman's download sandbox can't start.
+# also trim mkinitcpio's HOOKS before the pacman -Syu below can trigger a kernel upgrade
+# (which auto-regenerates the initramfs via pacman's own hook). autodetect is supposed to
+# constrain kms/block/filesystems down to modules the *running* system actually needs, but
+# under qemu-user cross-build /sys reflects the x86_64 build host, not a Raspberry Pi, so it
+# can't do that - and without a working autodetect, those hooks unconditionally bundle in
+# their *entire* module set instead (hundreds of irrelevant drivers). this kernel needs none
+# of them: root is addressed by PARTUUID (no blkid/LABEL lookup needed), the systemd hook
+# handles device waiting/mounting natively, and every boot-critical driver is built in
+RUN sed -i 's/^#DisableSandboxFilesystem/DisableSandboxFilesystem/;s/^#DisableSandboxSyscalls/DisableSandboxSyscalls/' /etc/pacman.conf \
+ && sed -i 's/ kms / /;s/ block / /;s/ filesystems / /' /etc/mkinitcpio.conf
+RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg pacman-key --init && pacman-key --populate archlinuxarm && pacman -Syu --noconfirm
+
+FROM pacman-init AS raspi-overlayroot
+ARG RPI_ARCH
+ENV QEMU_CPU=max
+RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg pacman -S --noconfirm binutils fakeroot
+RUN sed -i 's/^DisableSandboxFilesystem/#DisableSandboxFilesystem/;s/^DisableSandboxSyscalls/#DisableSandboxSyscalls/' /etc/pacman.conf
+USER nobody
+COPY --chown=nobody:nobody raspi-overlayroot /opt/raspi-overlayroot
+RUN cd /opt/raspi-overlayroot && makepkg -d
+
+FROM pacman-init
+ARG BUILD_DATE
+ARG RPI_ARCH
+LABEL org.opencontainers.image.created=$BUILD_DATE
+ENV QEMU_CPU=max
+# install overlayroot
+RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 overlayroot)/;s/^ *MODULES=(\(.*\)) *$/MODULES=(\1 overlay)/' /etc/mkinitcpio.conf \
+ && sed -i 's/ defaults / defaults,ro /' /etc/fstab
+# switch the kernel command line to a read-only root + overlayroot: armv7 is booted
+# directly by RPi firmware from /boot/cmdline.txt, while aarch64 boots through U-Boot,
+# which builds its command line from /boot/boot.txt into a compiled /boot/boot.scr
+# (see /boot/mkscr) - so that one needs recompiling with mkimage after editing
+RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
+  if [ "$RPI_ARCH" = armv7 ]; then \
+    sed -i 's/ rw / ro /;s/$/ overlayroot/' /boot/cmdline.txt; \
+  else \
+    pacman -S --noconfirm uboot-tools \
+    && sed -i '/^setenv bootargs/{s/ rw / ro /;s/$/ overlayroot/}' /boot/boot.txt \
+    && (cd /boot && ./mkscr); \
+  fi
+RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
+    --mount=type=bind,from=raspi-overlayroot,source=/opt/raspi-overlayroot,destination=/opt/raspi-overlayroot \
+  pacman -U --noconfirm /opt/raspi-overlayroot/overlayroot-*.pkg.*
+# this stage branches from pacman-init, not raspi-overlayroot, so it never saw that
+# stage's sandbox reversal - redo it here, after this stage's own last pacman call
+RUN sed -i 's/^DisableSandboxFilesystem/#DisableSandboxFilesystem/;s/^DisableSandboxSyscalls/#DisableSandboxSyscalls/' /etc/pacman.conf
+# newer systemd renames the onboard NIC away from eth0 (enu1u1 on Pi 1-3, end0 on Pi 4);
+# these .link stubs give it back as an alternative name so 10-eth0.network matches on any board.
+# "10-" beats the unprefixed en.network the base image ships (Match Name=en*), which would
+# otherwise win by alphanumeric ordering per systemd.network(5)'s first-match-wins rule
+COPY 10-enu1u1.link 10-end0.link 10-eth0.network /etc/systemd/network/
+# create mnt-mutable.mount: auto-mounted (part of local-fs.target, so early - right
+# after the initramfs hands off the read-only root to the real init) but nofail, so
+# a missing/corrupt/unformatted mutable partition doesn't hold up or fail boot
+RUN echo '/dev/mmcblk0p3  /mnt/mutable f2fs defaults,nofail,discard 0 0' >> /etc/fstab
+# make systemd-timesync almost persistent across reboots
+RUN mkdir /var/lib/systemd/timesync \
+  && chown systemd-timesync:systemd-timesync /var/lib/systemd/timesync \
+  && echo '/mnt/mutable/timesync /var/lib/systemd/timesync none x-systemd.requires=/mnt/mutable,nofail,bind 0 0' >> /etc/fstab
+COPY systemd-timesyncd-override.conf /etc/systemd/system/systemd-timesyncd.service.d/override.conf
+# make /var/log (including the journal) persist across reboots too, instead of living
+# in the overlay's in-memory upper layer; the mutable-side directories themselves are
+# created at first boot in sd-format, once /mnt/mutable actually exists
+RUN echo '/mnt/mutable/log /var/log none x-systemd.requires=/mnt/mutable,nofail,bind 0 0' >> /etc/fstab
+COPY zz-persistent-storage.conf /etc/systemd/journald.conf.d/zz-persistent-storage.conf
+# entrypoint
+RUN systemctl set-default multi-user.target
+ENTRYPOINT [ "/bin/bash" ]
+WORKDIR /root

@@ -9,12 +9,16 @@ if findmnt "${mountdir}"/mnt/host > /dev/null; then
   sudo rm -rf "${mountdir}"/mnt/host
 fi
 
-if findmnt "${MEMORY_CARD_DEVICE}"p3 > /dev/null; then
-  sudo umount "${MEMORY_CARD_DEVICE}"p3
+if findmnt "${MEMORY_CARD_DEVICE}"*3 > /dev/null; then
+  sudo umount "${MEMORY_CARD_DEVICE}"*3
 fi
-if findmnt "${MEMORY_CARD_DEVICE}"p1 > /dev/null; then
-  sudo umount "${MEMORY_CARD_DEVICE}"p1
+if findmnt "${MEMORY_CARD_DEVICE}"*1 > /dev/null; then
+  sudo umount "${MEMORY_CARD_DEVICE}"*1
 fi
-if findmnt "${MEMORY_CARD_DEVICE}"p2 > /dev/null; then
-  sudo umount "${MEMORY_CARD_DEVICE}"p2
+if findmnt "${MEMORY_CARD_DEVICE}"*2 > /dev/null; then
+  sudo umount "${MEMORY_CARD_DEVICE}"*2
 fi
+# ext4 records the mount point path (and time) of its last mount in the superblock;
+# once unmounted, blank it so the local build machine's path doesn't end up baked
+# into the shipped image
+sudo debugfs -w -R "ssv last_mounted /" "${MEMORY_CARD_DEVICE}"*2

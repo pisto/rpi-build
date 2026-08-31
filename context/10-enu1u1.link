@@ -1,0 +1,6 @@
+[Match]
+Type=ether
+Driver=lan78xx smsc95xx
+
+[Link]
+AlternativeName=eth0
