@@ -1,6 +1,6 @@
 # Memorycard initialization
 
-This folder contains the Raspberry Pi SD card initialization. The image is based on [Arch Linux ARM](https://archlinuxarm.org/), plus [raspi-overlayroot](https://github.com/nils-werner/raspi-overlayroot).
+This folder contains the Raspberry Pi SD card initialization. The image is based on [Arch Linux ARM](https://archlinuxarm.org/).
 
 ## Requirements
 
@@ -9,11 +9,6 @@ qemu-user-static-arm  # may be qemu-user-static in some distro
 podman
 sudo
 wget
-```
-
-Make sure to initialize ad update the raspi-overlay git submodule:
-```bash
-git submodule update --init
 ```
 
 ## Building the base image
@@ -28,7 +23,13 @@ wget -O ArchLinuxARM-rpi-armv7-latest.tar.gz.md5 http://os.archlinuxarm.org/os/A
 # possibly commit it
 ```
 
-The image runs with a read-only root filesystem, with a writable in-memory overlay (see project [raspi-overlayroot](https://github.com/nils-werner/raspi-overlayroot) for details).
+The image runs the root filesystem under a writable in-memory overlay, so every change to `/` is discarded at reboot and none of it reaches the SD card — overlayfs never writes to its lower layer. This is systemd's own `systemd.volatile=overlay`, set up in the initramfs by `systemd-volatile-root` (mkinitcpio's `sd-volatile` hook).
+
+The root partition itself is still mounted read-write, which the overlay makes harmless for your data. It does mean ext4 updates its superblock on each boot and keeps its journal open, so an unclean power cut needs journal recovery on the next boot; adding `ro` to the kernel command line avoids that, at no cost to writability since `/` is the overlay either way.
+
+Anything that must survive a reboot goes on the third partition, mounted at `/mnt/mutable` — currently the journal (bind-mounted onto `/var/log`) and systemd-timesyncd's clock file. That mount is `nofail`, so a missing or unformatted mutable partition does not hold up or fail the boot.
+
+To reach the real SD card from the running system, use `rwrootfs`, which mounts it read-write at `/mnt/root` (`rwrootfs close` when done). Note that `mount -o remount,rw /` does *not* work for this: `/` is the overlay and is already writable, but its writes live in tmpfs and vanish at reboot.
 
 The script leaves in podman the imported base tarball. The import is deterministic, and so is the image hash. The image tag is `localhost/archlinuxarm/rpi:import-"${date}"`, where `${date}` is the timestamp (YYYY-MM-DD) contained in the gzip header of the tarball.
 

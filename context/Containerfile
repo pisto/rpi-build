@@ -16,40 +16,49 @@ RUN sed -i 's/^#DisableSandboxFilesystem/DisableSandboxFilesystem/;s/^#DisableSa
  && sed -i 's/ kms / /;s/ block / /;s/ filesystems / /' /etc/mkinitcpio.conf
 RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg pacman-key --init && pacman-key --populate archlinuxarm && pacman -Syu --noconfirm
 
-FROM pacman-init AS raspi-overlayroot
-ARG RPI_ARCH
-ENV QEMU_CPU=max
-RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg pacman -S --noconfirm binutils fakeroot
-RUN sed -i 's/^DisableSandboxFilesystem/#DisableSandboxFilesystem/;s/^DisableSandboxSyscalls/#DisableSandboxSyscalls/' /etc/pacman.conf
-USER nobody
-COPY --chown=nobody:nobody raspi-overlayroot /opt/raspi-overlayroot
-RUN cd /opt/raspi-overlayroot && makepkg -d
-
 FROM pacman-init
 ARG BUILD_DATE
 ARG RPI_ARCH
 LABEL org.opencontainers.image.created=$BUILD_DATE
 ENV QEMU_CPU=max
-# install overlayroot
-RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 overlayroot)/;s/^ *MODULES=(\(.*\)) *$/MODULES=(\1 overlay)/' /etc/mkinitcpio.conf \
+# keep the root filesystem read-only and put a tmpfs overlay on top of it, so the SD
+# card sees no writes at runtime. this is systemd's own systemd.volatile=overlay, set
+# up in the initramfs by systemd-volatile-root; mkinitcpio ships the sd-volatile hook
+# that pulls in that binary, its unit and the overlay module. (the old out-of-tree
+# raspi-overlayroot package did the same job with a legacy run_latehook, which a
+# systemd-based initramfs never calls - so it silently did nothing.)
+RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 sd-volatile)/' /etc/mkinitcpio.conf \
  && sed -i 's/ defaults / defaults,ro /' /etc/fstab
-# switch the kernel command line to a read-only root + overlayroot: armv7 is booted
-# directly by RPi firmware from /boot/cmdline.txt, while aarch64 boots through U-Boot,
-# which builds its command line from /boot/boot.txt into a compiled /boot/boot.scr
-# (see /boot/mkscr) - so that one needs recompiling with mkimage after editing
+# put the volatile overlay on the kernel command line: armv7 is booted directly by RPi
+# firmware from /boot/cmdline.txt, while aarch64 boots through U-Boot, which builds its
+# command line from /boot/boot.txt into a compiled /boot/boot.scr (see /boot/mkscr) - so
+# that one needs recompiling with mkimage after editing.
+# the stock " rw " is left alone: overlayfs never writes to its lower layer, so the root
+# filesystem is protected by the overlay itself rather than by a ro root mount. note that
+# ro would still buy something the overlay does not - an rw ext4 mount updates the
+# superblock (mount count, mount time) on every boot and leaves the journal open, so a
+# power cut needs recovery on the next boot - so put " ro " back here if that matters
+# the ",z" on the bind mount is load-bearing on SELinux hosts: without it the file is
+# mounted but unreadable, and sed's "r" command ignores an unreadable file *silently* -
+# which produced a working-looking image with the fixups missing. hence the greps below:
+# every edit here is verified, so a silent no-op fails the build instead of shipping
 RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
+    --mount=type=bind,source=boot-fdt-fixups.txt,target=/tmp/boot-fdt-fixups.txt,z \
   if [ "$RPI_ARCH" = armv7 ]; then \
-    sed -i 's/ rw / ro /;s/$/ overlayroot/' /boot/cmdline.txt; \
+    sed -i 's/$/ systemd.volatile=overlay/' /boot/cmdline.txt \
+    && grep -q 'systemd.volatile=overlay' /boot/cmdline.txt; \
   else \
     pacman -S --noconfirm uboot-tools \
-    && sed -i '/^setenv bootargs/{s/ rw / ro /;s/$/ overlayroot/}' /boot/boot.txt \
+    && sed -i -e '/^setenv bootargs/s/$/ systemd.volatile=overlay/' \
+              -e '\%/dtbs/%r /tmp/boot-fdt-fixups.txt' /boot/boot.txt \
+    && grep -q '^setenv bootargs.*systemd.volatile=overlay$' /boot/boot.txt \
+    && grep -q 'fdt set /system linux,revision' /boot/boot.txt \
     && (cd /boot && ./mkscr); \
   fi
-RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
-    --mount=type=bind,from=raspi-overlayroot,source=/opt/raspi-overlayroot,destination=/opt/raspi-overlayroot \
-  pacman -U --noconfirm /opt/raspi-overlayroot/overlayroot-*.pkg.*
-# this stage branches from pacman-init, not raspi-overlayroot, so it never saw that
-# stage's sandbox reversal - redo it here, after this stage's own last pacman call
+# regenerate the initramfs so the sd-volatile hook above is actually built in - nothing
+# else in this stage installs a package that would trigger mkinitcpio's own pacman hook
+RUN mkinitcpio -P
+# re-enable pacman's download sandbox, after this stage's last pacman call
 RUN sed -i 's/^DisableSandboxFilesystem/#DisableSandboxFilesystem/;s/^DisableSandboxSyscalls/#DisableSandboxSyscalls/' /etc/pacman.conf
 # newer systemd renames the onboard NIC away from eth0 (enu1u1 on Pi 1-3, end0 on Pi 4);
 # these .link stubs give it back as an alternative name so 10-eth0.network matches on any board.
@@ -67,9 +76,15 @@ RUN mkdir /var/lib/systemd/timesync \
 COPY systemd-timesyncd-override.conf /etc/systemd/system/systemd-timesyncd.service.d/override.conf
 # make /var/log (including the journal) persist across reboots too, instead of living
 # in the overlay's in-memory upper layer; the mutable-side directories themselves are
-# created at first boot in sd-format, once /mnt/mutable actually exists
+# created at first boot in sd-format, once /mnt/mutable actually exists.
+# journald's default Storage=auto is deliberately left alone: it goes persistent exactly
+# when /var/log/journal exists, i.e. when the bind mount below succeeded, and falls back
+# to /run/log/journal when the (nofail) mutable partition didn't mount - which is the
+# behaviour we want. Storage=persistent would instead create a journal dir in the
+# overlay's tmpfs and burn RAM pretending to persist
 RUN echo '/mnt/mutable/log /var/log none x-systemd.requires=/mnt/mutable,nofail,bind 0 0' >> /etc/fstab
-COPY zz-persistent-storage.conf /etc/systemd/journald.conf.d/zz-persistent-storage.conf
+# the root filesystem is read-only at runtime; rwrootfs reaches the real SD card
+COPY rwrootfs /usr/local/bin/rwrootfs
 # entrypoint
 RUN systemctl set-default multi-user.target
 ENTRYPOINT [ "/bin/bash" ]
