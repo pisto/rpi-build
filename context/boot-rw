@@ -1,0 +1,124 @@
+#!/bin/bash
+
+# Reboot into a fully writable, persistent system - and back again.
+#
+# This image normally boots with "ro systemd.volatile=overlay": the root partition is
+# mounted read-only and shadowed by a tmpfs overlay, so every change to / is discarded
+# at the next reboot and ext4 never writes to the card. /boot is mounted read-only too,
+# via /etc/fstab. That is deliberately awkward to subvert from the running system - the
+# overlay's lower layer is mounted inside the initramfs, which is torn down at
+# switch-root, so it is not even in /proc/mounts (only /proc/fs/ext4/<dev>/options
+# still reports its state).
+#
+# So rather than reaching around the overlay, this drops both flags from the kernel
+# command line, drops the read-only option from /boot's fstab entry, and reboots. The
+# next boot mounts both partitions read-write with no overlay, and changes persist.
+# Run `boot-rw revert` to put all of it back.
+
+set -euo pipefail
+
+root_dev=/dev/mmcblk0p2
+mountdir=/run/boot-rw-root
+
+[[ ${EUID} -eq 0 ]] || exec sudo -- "$0" "$@"
+
+case "${1:-rw}" in
+  rw)     mode=rw ;;
+  revert) mode=revert ;;
+  *) echo "usage: $(basename "$0") [revert]" 1>&2; exit 1 ;;
+esac
+
+# armv7 is booted directly by the RPi firmware from cmdline.txt, while aarch64 boots
+# through U-Boot, which builds its command line from boot.txt into a compiled boot.scr
+if [[ -f /boot/cmdline.txt ]]; then
+  bootfile=/boot/cmdline.txt
+  line='^'
+elif [[ -f /boot/boot.txt ]]; then
+  bootfile=/boot/boot.txt
+  line='^setenv bootargs'
+else
+  echo "Found neither /boot/cmdline.txt nor /boot/boot.txt." 1>&2
+  exit 1
+fi
+
+current="$(grep "${line}" "${bootfile}")"
+
+# /etc/fstab has to be edited on the real root partition. When the overlay is active
+# that is not / (writes there would land in the overlay and be lost at exactly the
+# reboot they need to survive), so mount the partition a second time to reach it.
+# Linux keeps one superblock per device: the mount has to match the state the hidden
+# lower is already in - a plain `mount` asks for rw and the kernel refuses outright
+# ("would change RO state") - and only then can a remount flip that shared superblock.
+fstab=/etc/fstab
+if [[ $(findmnt -no FSTYPE /) == overlay ]]; then
+  rootstate="$(head -1 "/proc/fs/ext4/$(basename "${root_dev}")/options")"
+  mkdir -p "${mountdir}"
+  mount -o "${rootstate}" "${root_dev}" "${mountdir}"
+  trap 'mount -o remount,"${rootstate}" "${mountdir}" 2>/dev/null || true
+        umount "${mountdir}" 2>/dev/null || true
+        rmdir "${mountdir}" 2>/dev/null || true' EXIT
+  mount -o remount,rw "${mountdir}"
+  fstab="${mountdir}"/etc/fstab
+fi
+
+# the /boot entry is written by the image build as "defaults,ro"
+boot_entry="$(grep -E "^[^#]*[[:space:]]/boot[[:space:]]" "${fstab}")" || {
+  echo "No /boot entry found in ${fstab}." 1>&2
+  exit 1
+}
+
+# the two pieces of state are tracked separately, and each edit is applied only when it
+# is actually needed. checking just one of them would refuse to repair a half-applied
+# state, and re-running an edit that was already applied would append a second copy of
+# systemd.volatile=overlay to the command line
+cmdline_todo=no
+fstab_todo=no
+if [[ ${mode} == rw ]]; then
+  if [[ ${current}    == *systemd.volatile=overlay* ]]; then cmdline_todo=yes; fi
+  if [[ ${boot_entry} == *defaults,ro* ]];             then fstab_todo=yes;   fi
+else
+  if [[ ${current}    != *systemd.volatile=overlay* ]]; then cmdline_todo=yes; fi
+  if [[ ${boot_entry} != *defaults,ro* ]];              then fstab_todo=yes;   fi
+fi
+
+if [[ ${cmdline_todo} == no && ${fstab_todo} == no ]]; then
+  if [[ ${mode} == rw ]]; then
+    echo "Already configured to boot read-write. Nothing to do."
+  else
+    echo "Already configured to boot read-only with a volatile overlay. Nothing to do."
+  fi
+  exit 0
+fi
+
+mount -o remount,rw /boot
+if [[ ${mode} == rw ]]; then
+  if [[ ${cmdline_todo} == yes ]]; then
+    sed -i "/${line}/{s/ ro / rw /;s/ systemd.volatile=overlay//}" "${bootfile}"
+  fi
+  if [[ ${fstab_todo} == yes ]]; then
+    sed -i "\%[[:space:]]/boot[[:space:]]%s/defaults,ro/defaults/" "${fstab}"
+  fi
+else
+  if [[ ${cmdline_todo} == yes ]]; then
+    sed -i "/${line}/{s/ rw / ro /;s/\$/ systemd.volatile=overlay/}" "${bootfile}"
+  fi
+  if [[ ${fstab_todo} == yes ]]; then
+    sed -i "\%[[:space:]]/boot[[:space:]]%s/defaults\([[:space:]]\)/defaults,ro\1/" "${fstab}"
+  fi
+fi
+if [[ ${bootfile} == /boot/boot.txt ]]; then
+  (cd /boot && ./mkscr > /dev/null)
+fi
+sync
+
+echo "==> Kernel command line is now:"
+grep "${line}" "${bootfile}" | sed 's/^/    /'
+echo "==> /boot fstab entry is now:"
+grep -E "^[^#]*[[:space:]]/boot[[:space:]]" "${fstab}" | sed 's/^/    /'
+if [[ ${mode} == rw ]]; then
+  echo "==> Rebooting: / and /boot will both come back writable and persistent."
+  echo "    Run 'boot-rw revert' to go back to the read-only volatile root."
+else
+  echo "==> Rebooting into the read-only volatile root."
+fi
+exec systemctl reboot

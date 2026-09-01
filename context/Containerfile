@@ -1,91 +1,54 @@
 ARG BASE_IMAGE
 
-FROM $BASE_IMAGE AS pacman-init
+FROM $BASE_IMAGE
 ARG RPI_ARCH
+# use all features of emulated cpu
 ENV QEMU_CPU=max
-# Landlock isn't available under qemu-user emulation, so pacman's download sandbox can't start.
-# also trim mkinitcpio's HOOKS before the pacman -Syu below can trigger a kernel upgrade
-# (which auto-regenerates the initramfs via pacman's own hook). autodetect is supposed to
-# constrain kms/block/filesystems down to modules the *running* system actually needs, but
-# under qemu-user cross-build /sys reflects the x86_64 build host, not a Raspberry Pi, so it
-# can't do that - and without a working autodetect, those hooks unconditionally bundle in
-# their *entire* module set instead (hundreds of irrelevant drivers). this kernel needs none
-# of them: root is addressed by PARTUUID (no blkid/LABEL lookup needed), the systemd hook
-# handles device waiting/mounting natively, and every boot-critical driver is built in
-RUN sed -i 's/^#DisableSandboxFilesystem/DisableSandboxFilesystem/;s/^#DisableSandboxSyscalls/DisableSandboxSyscalls/' /etc/pacman.conf \
- && sed -i 's/ kms / /;s/ block / /;s/ filesystems / /' /etc/mkinitcpio.conf
-RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg pacman-key --init && pacman-key --populate archlinuxarm && pacman -Syu --noconfirm
 
-FROM pacman-init
-ARG BUILD_DATE
-ARG RPI_ARCH
-LABEL org.opencontainers.image.created=$BUILD_DATE
-ENV QEMU_CPU=max
-# keep the root filesystem read-only and put a tmpfs overlay on top of it, so the SD
-# card sees no writes at runtime. this is systemd's own systemd.volatile=overlay, set
-# up in the initramfs by systemd-volatile-root; mkinitcpio ships the sd-volatile hook
-# that pulls in that binary, its unit and the overlay module. (the old out-of-tree
-# raspi-overlayroot package did the same job with a legacy run_latehook, which a
-# systemd-based initramfs never calls - so it silently did nothing.)
-RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 sd-volatile)/' /etc/mkinitcpio.conf \
- && sed -i 's/ defaults / defaults,ro /' /etc/fstab
-# put the volatile overlay on the kernel command line: armv7 is booted directly by RPi
-# firmware from /boot/cmdline.txt, while aarch64 boots through U-Boot, which builds its
-# command line from /boot/boot.txt into a compiled /boot/boot.scr (see /boot/mkscr) - so
-# that one needs recompiling with mkimage after editing.
-# the stock " rw " is left alone: overlayfs never writes to its lower layer, so the root
-# filesystem is protected by the overlay itself rather than by a ro root mount. note that
-# ro would still buy something the overlay does not - an rw ext4 mount updates the
-# superblock (mount count, mount time) on every boot and leaves the journal open, so a
-# power cut needs recovery on the next boot - so put " ro " back here if that matters
-# the ",z" on the bind mount is load-bearing on SELinux hosts: without it the file is
-# mounted but unreadable, and sed's "r" command ignores an unreadable file *silently* -
-# which produced a working-looking image with the fixups missing. hence the greps below:
-# every edit here is verified, so a silent no-op fails the build instead of shipping
-RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
-    --mount=type=bind,source=boot-fdt-fixups.txt,target=/tmp/boot-fdt-fixups.txt,z \
-  if [ "$RPI_ARCH" = armv7 ]; then \
-    sed -i 's/$/ systemd.volatile=overlay/' /boot/cmdline.txt \
-    && grep -q 'systemd.volatile=overlay' /boot/cmdline.txt; \
+# make / and /boot read only, mount overlayfs on root, 
+COPY boot-fdt-fixups.txt /boot
+RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 sd-volatile )/' /etc/mkinitcpio.conf \
+  && sed -i 's/ defaults / defaults,ro /' /etc/fstab \
+  && sed -i 's/ kms / /;s/ block / /;s/ filesystems / /' /etc/mkinitcpio.conf \
+  && if [ "$RPI_ARCH" = armv7 ]; then \
+    sed -i 's/ rw / ro /;s/$/ systemd.volatile=overlay/' /boot/cmdline.txt \
+    && grep -q ' ro .*systemd.volatile=overlay' /boot/cmdline.txt; \
   else \
-    pacman -S --noconfirm uboot-tools \
-    && sed -i -e '/^setenv bootargs/s/$/ systemd.volatile=overlay/' \
-              -e '\%/dtbs/%r /tmp/boot-fdt-fixups.txt' /boot/boot.txt \
-    && grep -q '^setenv bootargs.*systemd.volatile=overlay$' /boot/boot.txt \
-    && grep -q 'fdt set /system linux,revision' /boot/boot.txt \
-    && (cd /boot && ./mkscr); \
+    sed -i -e '/^setenv bootargs/{s/ rw / ro /;s/$/ systemd.volatile=overlay/}' \
+              -e '\%/dtbs/%r /boot/boot-fdt-fixups.txt' /boot/boot.txt \
+    && grep -q '^setenv bootargs.* ro .*systemd.volatile=overlay$' /boot/boot.txt \
+    && grep -q 'fdt set /system linux,revision' /boot/boot.txt; \
   fi
-# regenerate the initramfs so the sd-volatile hook above is actually built in - nothing
-# else in this stage installs a package that would trigger mkinitcpio's own pacman hook
-RUN mkinitcpio -P
-# re-enable pacman's download sandbox, after this stage's last pacman call
-RUN sed -i 's/^DisableSandboxFilesystem/#DisableSandboxFilesystem/;s/^DisableSandboxSyscalls/#DisableSandboxSyscalls/' /etc/pacman.conf
-# newer systemd renames the onboard NIC away from eth0 (enu1u1 on Pi 1-3, end0 on Pi 4);
-# these .link stubs give it back as an alternative name so 10-eth0.network matches on any board.
-# "10-" beats the unprefixed en.network the base image ships (Match Name=en*), which would
-# otherwise win by alphanumeric ordering per systemd.network(5)'s first-match-wins rule
-COPY 10-enu1u1.link 10-end0.link 10-eth0.network /etc/systemd/network/
-# create mnt-mutable.mount: auto-mounted (part of local-fs.target, so early - right
-# after the initramfs hands off the read-only root to the real init) but nofail, so
-# a missing/corrupt/unformatted mutable partition doesn't hold up or fail boot
+
+# mutable partition
 RUN echo '/dev/mmcblk0p3  /mnt/mutable f2fs defaults,nofail,discard 0 0' >> /etc/fstab
 # make systemd-timesync almost persistent across reboots
 RUN mkdir /var/lib/systemd/timesync \
   && chown systemd-timesync:systemd-timesync /var/lib/systemd/timesync \
   && echo '/mnt/mutable/timesync /var/lib/systemd/timesync none x-systemd.requires=/mnt/mutable,nofail,bind 0 0' >> /etc/fstab
 COPY systemd-timesyncd-override.conf /etc/systemd/system/systemd-timesyncd.service.d/override.conf
-# make /var/log (including the journal) persist across reboots too, instead of living
-# in the overlay's in-memory upper layer; the mutable-side directories themselves are
-# created at first boot in sd-format, once /mnt/mutable actually exists.
-# journald's default Storage=auto is deliberately left alone: it goes persistent exactly
-# when /var/log/journal exists, i.e. when the bind mount below succeeded, and falls back
-# to /run/log/journal when the (nofail) mutable partition didn't mount - which is the
-# behaviour we want. Storage=persistent would instead create a journal dir in the
-# overlay's tmpfs and burn RAM pretending to persist
+# mutable /var/log
 RUN echo '/mnt/mutable/log /var/log none x-systemd.requires=/mnt/mutable,nofail,bind 0 0' >> /etc/fstab
-# the root filesystem is read-only at runtime; rwrootfs reaches the real SD card
-COPY rwrootfs /usr/local/bin/rwrootfs
+
+# make reliable eth0 alias for ethernet interface, configure eth0 for automatic dhcp
+COPY 10-enu1u1.link 10-end0.link 10-eth0.network /etc/systemd/network/
 # entrypoint
 RUN systemctl set-default multi-user.target
-ENTRYPOINT [ "/bin/bash" ]
-WORKDIR /root
+
+# next operations are non reproducible (pacman updates), so label when these were ran, invalidate all cached layers below
+ARG BUILD_DATE
+LABEL org.opencontainers.image.created=$BUILD_DATE
+
+# run a full system upgrade, force reinstall linux kernel to regenrate initramfs, [rpi4] set command line parameters to uboot
+RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
+    --mount=type=tmpfs,destination=/etc/pacman.d/gnupg \
+  mkdir -p /etc/pacman.d/hooks/ && ln -s /dev/null /etc/pacman.d/hooks/90-mkinitcpio-install.hook \
+  && pacman-key --init && pacman-key --populate archlinuxarm \
+  && pacman -Rs --noconfirm linux-firmware \
+  && rm -f /etc/pacman.d/hooks/90-mkinitcpio-install.hook \
+  && if [ "$RPI_ARCH" = armv7 ]; then \
+    pacman -Syu --noconfirm --disable-sandbox --overwrite '/etc/tpm2-tss/fapi-profiles/*' linux-rpi; \
+  else \
+    pacman -Syu --noconfirm --disable-sandbox --overwrite '/etc/tpm2-tss/fapi-profiles/*' linux-aarch64 uboot-tools \
+    && (cd /boot && ./mkscr); \
+  fi

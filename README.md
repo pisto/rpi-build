@@ -25,11 +25,15 @@ wget -O ArchLinuxARM-rpi-armv7-latest.tar.gz.md5 http://os.archlinuxarm.org/os/A
 
 The image runs the root filesystem under a writable in-memory overlay, so every change to `/` is discarded at reboot and none of it reaches the SD card — overlayfs never writes to its lower layer. This is systemd's own `systemd.volatile=overlay`, set up in the initramfs by `systemd-volatile-root` (mkinitcpio's `sd-volatile` hook).
 
-The root partition itself is still mounted read-write, which the overlay makes harmless for your data. It does mean ext4 updates its superblock on each boot and keeps its journal open, so an unclean power cut needs journal recovery on the next boot; adding `ro` to the kernel command line avoids that, at no cost to writability since `/` is the overlay either way.
+The root partition is additionally mounted `ro`. That is not what protects your data — the overlay already does — but it stops ext4's own writes: mounted read-write, the driver updates the superblock on every boot and keeps its journal open, so an unclean power cut needs journal recovery on the next boot. It costs nothing, since `/` is the writable overlay either way.
+
+The lower layer is mounted inside the initramfs, which is torn down at switch-root, so it does not appear in `/proc/mounts` at all — `mount` only shows `/` as `overlay`, with a `lowerdir=/sysroot` that no longer resolves. To check its state, read the first line of `/proc/fs/ext4/mmcblk0p2/options`, which reports `rw` or `ro`.
 
 Anything that must survive a reboot goes on the third partition, mounted at `/mnt/mutable` — currently the journal (bind-mounted onto `/var/log`) and systemd-timesyncd's clock file. That mount is `nofail`, so a missing or unformatted mutable partition does not hold up or fail the boot.
 
-To reach the real SD card from the running system, use `rwrootfs`, which mounts it read-write at `/mnt/root` (`rwrootfs close` when done). Note that `mount -o remount,rw /` does *not* work for this: `/` is the overlay and is already writable, but its writes live in tmpfs and vanish at reboot.
+That also means the overlay cannot be undone from the running system. To make persistent changes, run `boot-rw`: it strips `ro` and `systemd.volatile=overlay` from the kernel command line, drops the `ro` option from `/boot`'s `/etc/fstab` entry, and reboots, so the system comes back up with `/` and `/boot` both mounted read-write and no overlay. `boot-rw revert` puts all of it back and reboots again. Both directions are idempotent, and either will repair a half-applied state.
+
+Note that `mount -o remount,rw /` is *not* a substitute: `/` is the overlay and already writable, but its writes live in tmpfs and vanish at reboot. For the same reason, anything you install while the overlay is active — `boot-rw` itself included — is gone at the next boot unless written from a `boot-rw` session.
 
 The script leaves in podman the imported base tarball. The import is deterministic, and so is the image hash. The image tag is `localhost/archlinuxarm/rpi:import-"${date}"`, where `${date}` is the timestamp (YYYY-MM-DD) contained in the gzip header of the tarball.
 

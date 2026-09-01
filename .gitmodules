@@ -1,3 +1,0 @@
-[submodule "filesystem/docker-context-rpi-armv7/raspi-overlayroot"]
-	path = context/raspi-overlayroot
-	url = https://github.com/nils-werner/raspi-overlayroot.git

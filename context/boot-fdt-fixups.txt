@@ -1,0 +1,10 @@
+    # The VideoCore firmware fixes up the device tree it hands to U-Boot with runtime
+    # board data - /system/linux,revision and /chosen/bootloader/* - but the FDT loaded
+    # above is ALARM's mainline one, so the kernel never sees them. rpi-eeprom-update
+    # needs the revision to identify the board (without it, it declares "Device does not
+    # a have a Raspberry Pi bootloader EEPROM" and quits) and the build-timestamp to read
+    # the installed bootloader version; its other two fallbacks - a Revision line in
+    # /proc/cpuinfo, and vcgencmd - are both downstream-kernel-only. Copy those two
+    # properties across. Guarded as one chain: a failure must not stop the boot.
+    if fdt addr ${fdt_addr} && fdt get value fw_rev /system linux,revision && fdt get value fw_blts /chosen/bootloader build-timestamp && fdt addr ${fdt_addr_r} && fdt resize 4096 && fdt mknode / system && fdt set /system linux,revision <${fw_rev}> && fdt mknode /chosen bootloader && fdt set /chosen/bootloader build-timestamp <${fw_blts}>; then echo "copied firmware board info into kernel FDT"; else echo "WARNING: failed to copy firmware board info into kernel FDT"; fi
+    fdt addr ${fdt_addr_r}

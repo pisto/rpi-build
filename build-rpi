@@ -22,5 +22,5 @@ fi
 
 # extract date from gzip header
 date="$(date --date=@"$(dd status=none bs=4 skip=1 count=1 < "${archive}" | od -t u4 -An | grep -Eo '[0-9]*')" -I)"
-podman import --arch "${podman_arch}" --os linux "${archive}" localhost/archlinuxarm/rpi:import-"${date}" -c ENTRYPOINT=/bin/bash -c LABEL=org.opencontainers.image.base.name="${AARCH_URL}" -c LABEL=org.opencontainers.image.base.date="${date}" -c LABEL=org.opencontainers.image.base.digest="$(cut -f 1 -d ' ' <<< "${md5}")"
+podman import --arch "${podman_arch}" --os linux "${archive}" localhost/archlinuxarm/rpi:import-"${date}" -c WORKDIR=/root -c ENTRYPOINT=/bin/bash -c LABEL=org.opencontainers.image.base.name="${AARCH_URL}" -c LABEL=org.opencontainers.image.base.date="${date}" -c LABEL=org.opencontainers.image.base.digest="$(cut -f 1 -d ' ' <<< "${md5}")"
 podman build --jobs=0 --arch "${podman_arch}" --os linux --cap-add=CAP_SYS_CHROOT -t localhost/archlinuxarm/rpi context --build-arg BASE_IMAGE=localhost/archlinuxarm/rpi:import-"${date}" --build-arg BUILD_DATE="${build_date}" --build-arg RPI_ARCH="${RPI_ARCH}"

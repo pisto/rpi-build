@@ -39,8 +39,12 @@ trap 'podman rm "${container}" > /dev/null' EXIT
 podman export "${container}" | sudo tar x -C "${mountdir}"
 
 ./sd-exec bash -c '
+set -euo pipefail
+
 systemd-machine-id-setup
 ssh-keygen -A
+pacman-key --init
+pacman-key --populate archlinuxarm
 mkdir /mnt/mutable/timesync
 touch /mnt/mutable/timesync/clock
 chown -R systemd-timesync:systemd-timesync /mnt/mutable/timesync
@@ -52,6 +56,8 @@ chmod 2755 /mnt/mutable/log/journal
 
 [[ -f ~/.ssh/id_rsa.pub ]] || exit
 ./sd-exec bash -c < ~/.ssh/id_rsa.pub '
+set -euo pipefail
+
 passwd -d root
 passwd -l root
 passwd -d alarm
@@ -60,6 +66,8 @@ umask 077
 mkdir -p ~/.ssh
 exec cat > ~/.ssh/authorized_keys'
 ./sd-exec su alarm -c < ~/.ssh/id_rsa.pub '
+set -euo pipefail
+
 umask 077
 mkdir -p ~/.ssh
 exec cat > ~/.ssh/authorized_keys'
