@@ -4,11 +4,6 @@ set -euo pipefail
 
 mountdir="$(realpath mounts/$(basename "${MEMORY_CARD_DEVICE}"))"
 
-if findmnt "${mountdir}"/mnt/host > /dev/null; then
-  sudo umount "${mountdir}"/mnt/host
-  sudo rm -rf "${mountdir}"/mnt/host
-fi
-
 if findmnt "${MEMORY_CARD_DEVICE}"*3 > /dev/null; then
   sudo umount "${MEMORY_CARD_DEVICE}"*3
 fi

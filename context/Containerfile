@@ -47,8 +47,8 @@ RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
   && pacman -Rs --noconfirm linux-firmware \
   && rm -f /etc/pacman.d/hooks/90-mkinitcpio-install.hook \
   && if [ "$RPI_ARCH" = armv7 ]; then \
-    pacman -Syu --noconfirm --disable-sandbox --overwrite '/etc/tpm2-tss/fapi-profiles/*' linux-rpi; \
+    pacman -Syu --noconfirm --disable-sandbox --overwrite '*' linux-rpi; \
   else \
-    pacman -Syu --noconfirm --disable-sandbox --overwrite '/etc/tpm2-tss/fapi-profiles/*' linux-aarch64 uboot-tools \
+    pacman -Syu --noconfirm --disable-sandbox --overwrite '*' linux-aarch64 uboot-tools \
     && (cd /boot && ./mkscr); \
   fi
