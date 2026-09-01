@@ -1,0 +1,15 @@
+[Unit]
+Description=Re-apply .link advertisement once the PHY is attached
+# bcmgenet (and the USB drivers) attach the PHY at ndo_open, which happens long after
+# udev ran net_setup_link at device-add, so Advertise= fails there with EINVAL and the
+# link stays at its full rate. Re-triggering once the link is up makes it stick.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/udevadm trigger --action=add --subsystem-match=net
+
+[Install]
+WantedBy=multi-user.target

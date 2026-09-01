@@ -5,34 +5,41 @@ ARG RPI_ARCH
 # use all features of emulated cpu
 ENV QEMU_CPU=max
 
-# make / and /boot read only, mount overlayfs on root, drop the serial console
-# dropping enable_uart also unpins core_freq, which the firmware ties to the mini-UART baud
+# make / and /boot read only, mount overlayfs on root, 
 COPY boot-fdt-fixups.txt /boot
 RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 sd-volatile )/' /etc/mkinitcpio.conf \
   && sed -i 's/ defaults / defaults,ro /' /etc/fstab \
   && sed -i 's/ kms / /;s/ block / /;s/ filesystems / /' /etc/mkinitcpio.conf \
-  && sed -i '/^ *enable_uart=/d' /boot/config.txt \
-  && ! grep -q '^ *enable_uart=' /boot/config.txt \
   && if [ "$RPI_ARCH" = armv7 ]; then \
-    sed -i 's/ rw / ro /;s/$/ systemd.volatile=overlay/;s/ *\(console\|kgdboc\)=\(ttyS\|ttyAMA\|serial\)[0-9]*,[0-9]*//g' /boot/cmdline.txt \
-    && grep -q ' ro .*systemd.volatile=overlay' /boot/cmdline.txt \
-    && ! grep -qE '(console|kgdboc)=(ttyS|ttyAMA|serial)' /boot/cmdline.txt; \
+    sed -i 's/ rw / ro /;s/$/ systemd.volatile=overlay/' /boot/cmdline.txt \
+    && grep -q ' ro .*systemd.volatile=overlay' /boot/cmdline.txt; \
   else \
-    sed -i -e '/^setenv bootargs/{s/ rw / ro /;s/$/ systemd.volatile=overlay/;s/ *\(console\|kgdboc\)=\(ttyS\|ttyAMA\|serial\)[0-9]*,[0-9]*//g}' \
+    sed -i -e '/^setenv bootargs/{s/ rw / ro /;s/$/ systemd.volatile=overlay/}' \
               -e '\%/dtbs/%r /boot/boot-fdt-fixups.txt' /boot/boot.txt \
     && grep -q '^setenv bootargs.* ro .*systemd.volatile=overlay$' /boot/boot.txt \
-    && ! grep -qE '^setenv bootargs.*(console|kgdboc)=(ttyS|ttyAMA|serial)' /boot/boot.txt \
     && grep -q 'fdt set /system linux,revision' /boot/boot.txt; \
   fi
 
-# power: scale the cpu on demand instead of pinning it at max, and power down
-# the onboard radios. Both are Linux side - nothing here belongs in config.txt.
+# escape hatch out of the volatile overlay for persistent changes; documented in the README
+COPY boot-rw /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/boot-rw
+
+# power: scale the cpu on demand instead of pinning it at max, and power down the onboard radios
 COPY cpu-governor.conf /etc/tmpfiles.d/
 COPY no-wireless.conf /etc/modprobe.d/
 COPY rpi-wifi-poweroff /usr/local/bin/
 COPY rpi-wifi-poweroff.service /etc/systemd/system/
+# the .link Advertise= runs before the PHY is attached, so re-apply it once the link is up
+COPY rpi-link-advertise.service /etc/systemd/system/
 RUN chmod 0755 /usr/local/bin/rpi-wifi-poweroff \
-  && systemctl enable rpi-wifi-poweroff.service
+  && systemctl enable rpi-wifi-poweroff.service \
+  && systemctl enable rpi-link-advertise.service
+
+# halve the pi4 vpu core clock, overriding the 500MHz pin that enable_uart=1 would otherwise apply
+# gated to [pi4]: the pi2 already runs the core at 250 and the pi3 is untested here
+# enable_uart must stay - without it u-boot hangs on a dead mini-UART before boot.scr runs
+RUN printf '\n[pi4]\ncore_freq=250\n[all]\n' >> /boot/config.txt \
+  && grep -q '^core_freq=250$' /boot/config.txt
 
 # mutable partition
 RUN echo '/dev/mmcblk0p3  /mnt/mutable f2fs defaults,nofail,discard 0 0' >> /etc/fstab

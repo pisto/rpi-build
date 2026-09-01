@@ -5,5 +5,6 @@ Driver=bcmgenet
 [Link]
 AlternativeName=eth0
 # the gigabit PHY is a large share of idle draw; 100M costs bandwidth, not features
-BitsPerSecond=100M
-Duplex=full
+# Advertise=, not BitsPerSecond=: forcing a fixed speed is rejected by these drivers
+# with EINVAL, while restricting what autonegotiation offers settles at 100M and keeps EEE
+Advertise=100baset-full
