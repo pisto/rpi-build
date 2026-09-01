@@ -4,3 +4,6 @@ Driver=bcmgenet
 
 [Link]
 AlternativeName=eth0
+# the gigabit PHY is a large share of idle draw; 100M costs bandwidth, not features
+BitsPerSecond=100M
+Duplex=full

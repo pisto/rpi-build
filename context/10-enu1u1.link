@@ -4,3 +4,6 @@ Driver=lan78xx smsc95xx
 
 [Link]
 AlternativeName=eth0
+# no-op on the 100M-only smsc95xx boards, a real saving on the gigabit lan78xx
+BitsPerSecond=100M
+Duplex=full

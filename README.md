@@ -37,6 +37,24 @@ Note that `mount -o remount,rw /` is *not* a substitute: `/` is the overlay and 
 
 The script leaves in podman the imported base tarball. The import is deterministic, and so is the image hash. The image tag is `localhost/archlinuxarm/rpi:import-"${date}"`, where `${date}` is the timestamp (YYYY-MM-DD) contained in the gzip header of the tarball.
 
+## Power
+
+The stock image runs the CPU at its maximum clock permanently and leaves the onboard radios powered whether or not they are configured. On an idle Pi 4 that measured 100% of the cpufreq ticks at 1.5 GHz; with these changes the same idle board spends ~95% of its ticks at 600 MHz.
+
+The governor is set by [`cpu-governor.conf`](./context/cpu-governor.conf), installed into `/etc/tmpfiles.d`. It cannot be a modprobe option, because cpufreq is built into the kernel and `cpufreq.default_governor=` is a `__setup()` parameter rather than a module parameter — `/sys/module/cpufreq/parameters/default_governor` is read only. Going through `tmpfiles.d` keeps the kernel command line untouched. `systemd-tmpfiles` expands the glob in the path, so a single line covers every core.
+
+The radios are handled in two parts, because they power down differently. Bluetooth needs nothing but an unbound driver: `hci_uart_bcm` owns `BT_REG_ON` through its `shutdown-gpios`, so keeping the module out — [`no-wireless.conf`](./context/no-wireless.conf) in `/etc/modprobe.d` — leaves the core powered down. WiFi does not work that way: unloading `brcmfmac` removes the interface but the SDIO card stays enumerated and the host controller keeps its 250 MHz clock running. Only tearing down the SDIO host runs the `mmc-pwrseq` power-off that deasserts `WL_REG_ON`, which is what [`rpi-wifi-poweroff`](./context/rpi-wifi-poweroff) does from a oneshot unit.
+
+That script finds the host by asking which one enumerated a card of type `SDIO`, rather than by hardcoding an address. The address is board specific — `3f300000.mmc` on the Pi 3 and Zero 2 W, `fe300000.mmc` on the Pi 4 — and on the Pi 4 the SD card shares the `sdhci-iproc` driver with it. Matching on the card type doubles as the safety interlock, since an SD card enumerates as `SD` and eMMC as `MMC`, so the host holding the rootfs can never be selected. Boards with no onboard WiFi, the Pi 2 among them, match nothing and the unit exits having done nothing.
+
+The two images differ in what `config.txt` can reach, which is why none of the above goes through it. On aarch64 `boot.txt` loads Arch's mainline DTB from `/dtbs` and discards the one the firmware fixed up, so `dtoverlay=` and `dtparam=` never reach the kernel — `dtoverlay=disable-wifi` and friends are inert, and `vcgencmd` cannot work either, the mainline kernel having no `vcio` device. The armv7 image boots the downstream `linux-rpi` kernel straight from the firmware and keeps its device tree, so both do work there, and `dtoverlay=disable-wifi`/`disable-bt` would be an alternative to the unit above. What `config.txt` reaches on either image — `core_freq`, `gpu_freq`, `over_voltage` — is the smaller half of the available savings and would need `[pi2]`/`[pi3]`/`[pi4]` sections per board. Gating by mechanism instead keeps one set of files correct for both.
+
+The serial console is dropped alongside the other boot command line edits: `console=` is removed from `cmdline.txt` on armv7 and from `boot.txt`'s bootargs on aarch64, and `enable_uart` is deleted from `config.txt`. That last one also unpins `core_freq`, which the firmware holds fixed while the mini-UART is in use so its baud divisor stays valid. Note this leaves no recovery console.
+
+Ethernet is held at 100 Mbit in the `.link` files, where the existing driver match already gates it per board: the gigabit PHY is a large share of idle draw, and the two `Driver=` lines separate the Pi 4's `bcmgenet` from the USB `lan78xx`/`smsc95xx` of the older boards. It is a no-op on the 100 Mbit-only `smsc95xx` of the Pi 2 and Pi 3 B, and a real saving on the Pi 4 and the gigabit `lan78xx` of the Pi 3 B+. Drop both `BitsPerSecond=` lines to get the full link rate back.
+
+Wake-on-LAN is not available and cannot be made so: `ethtool` reports `Supports Wake-on: d` for `bcmgenet`, the device exposes no `power/wakeup`, and `/sys/power/mem_sleep` offers only `s2idle` — there is no sleep state to wake from to begin with. Energy Efficient Ethernet needs no attention either; it negotiates itself and reports active on gigabit links.
+
 ## Copying to a SD card
 
 Your SD card device should be defined with the `MEMORY_CARD_DEVICE` environment variable:

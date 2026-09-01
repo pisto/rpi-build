@@ -1,0 +1,12 @@
+[Unit]
+Description=Power down onboard WiFi
+# No-op on boards with no onboard WiFi, such as the Pi 2.
+ConditionPathExistsGlob=/sys/class/mmc_host/mmc*
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/rpi-wifi-poweroff
+
+[Install]
+WantedBy=multi-user.target

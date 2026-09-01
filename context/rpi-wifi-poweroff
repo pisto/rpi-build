@@ -1,0 +1,17 @@
+#!/bin/sh
+# Unbinding the SDIO host runs the mmc-pwrseq power-off that deasserts WL_REG_ON; unloading brcmfmac does not.
+# Selected by card type, not by address: the address is board specific, and type SDIO never matches the rootfs SD card.
+
+set -eu
+
+for type_file in /sys/class/mmc_host/mmc*/mmc*:*/type; do
+  [ -r "$type_file" ] || continue
+  [ "$(cat "$type_file")" = SDIO ] || continue
+
+  host=${type_file%/mmc*:*/type}
+  device=$(dirname "$(dirname "$(readlink -f "$host")")")
+
+  [ -d "$device/driver" ] || continue
+  echo "${device##*/}" > "$device/driver/unbind"
+  echo "powered down SDIO WiFi host ${device##*/}"
+done
