@@ -59,6 +59,10 @@ RUN echo '/mnt/mutable/log /var/log none x-systemd.requires=/mnt/mutable,nofail,
 # have), not created here; see README.md.
 RUN mkdir -p /srv/minecraft \
   && echo '/dev/sda4 /srv/minecraft btrfs nofail,noatime 0 0' >> /etc/fstab
+# swap on the same external SSD (/dev/sda5) - nofail for the same reason as
+# above; 99-swappiness.conf already biases reclaim toward page cache over
+# using it, so this is pressure relief for JVM spikes, not routine swapping
+RUN echo '/dev/sda5 none swap nofail 0 0' >> /etc/fstab
 COPY minecraft.slice /etc/systemd/system/
 COPY mc-provision-user /usr/local/bin/
 COPY 99-swappiness.conf /etc/sysctl.d/
