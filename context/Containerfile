@@ -95,6 +95,10 @@ RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
   && if [ "$RPI_ARCH" = armv7 ]; then \
     pacman -Syu --noconfirm --disable-sandbox --overwrite '*' linux-rpi; \
   else \
-    pacman -Syu --noconfirm --disable-sandbox --overwrite '*' linux-aarch64 uboot-tools jre-openjdk-headless jq ddclient libnatpmp \
+    # jdk-openjdk (not the headless JRE): jcmd/jstat/jfr need the full JDK's
+    # attach API to inspect the Minecraft JVMs live; perf+numactl are the
+    # tooling used to confirm this board has no NUMA topology and to profile
+    # GC/cache behaviour - see README.md
+    pacman -Syu --noconfirm --disable-sandbox --overwrite '*' linux-aarch64 uboot-tools jdk-openjdk jq ddclient libnatpmp perf numactl \
     && (cd /boot && ./mkscr); \
   fi

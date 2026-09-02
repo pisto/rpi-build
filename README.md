@@ -115,7 +115,18 @@ above does; it only uncommits unused regions back to the OS once live usage
 drops well below capacity, which is usage- rather than pressure-driven. No
 `-XX:+UseNUMA`: this board has no NUMA nodes, real or otherwise
 (`/sys/devices/system/node/` doesn't exist), so the flag would be a silent
-no-op.
+no-op — confirmed with `numactl` and by checking `CONFIG_NUMA` is unset in
+the running kernel's config, ruling out even the fake-NUMA SDRAM-bank-split
+trick some Pi forum threads describe.
+
+The image installs the full `jdk-openjdk`, not a headless JRE: `jcmd`/
+`jstat`/`jfr` (attach-API tooling only the JDK ships) are what's used to
+check GC health and JIT warm-up on the running servers. `perf` is installed
+for the same kind of live investigation (IPC, cache-miss rates) — on this
+board it can only see the private L1 caches and the cycle/instruction
+counters, since Cortex-A72's PMU has no distinct L2/LLC event and BCM2711
+exposes no memory-controller ("uncore") PMU at all, so DRAM bandwidth itself
+isn't measurable this way.
 
 The SSD's own power management was audited, not changed: it already has
 USB/PCIe autosuspend disabled (`power/control=on`) at every level between
