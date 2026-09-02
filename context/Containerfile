@@ -51,8 +51,33 @@ COPY systemd-timesyncd-override.conf /etc/systemd/system/systemd-timesyncd.servi
 # mutable /var/log
 RUN echo '/mnt/mutable/log /var/log none x-systemd.requires=/mnt/mutable,nofail,bind 0 0' >> /etc/fstab
 
+# minecraft servers: data lives on the external SSD (/dev/sda4, already a
+# blank btrfs filesystem labelled "minecraft"), not the volatile overlay
+# root - nofail since the SSD is removable and must not hold up boot.
+# Per-user accounts and their bind mounts are provisioned live with
+# mc-provision-user (needs the SSD attached, which a podman build doesn't
+# have), not created here; see README.md.
+RUN mkdir -p /srv/minecraft \
+  && echo '/dev/sda4 /srv/minecraft btrfs nofail,noatime 0 0' >> /etc/fstab
+COPY minecraft.slice /etc/systemd/system/
+COPY mc-provision-user /usr/local/bin/
+COPY 99-swappiness.conf /etc/sysctl.d/
+RUN chmod 0755 /usr/local/bin/mc-provision-user \
+  && systemctl enable systemd-oomd.service
+
+# dynamic DNS: package + the generic NAT-PMP IP-source script only - actual
+# credentials, target hostname and target-LAN gateway/MAC are instance
+# specific and configured live, not baked in here; see README.md.
+COPY ddclient-natpmp-ip /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/ddclient-natpmp-ip
+
 # make reliable eth0 alias for ethernet interface, configure eth0 for automatic dhcp
 COPY 10-enu1u1.link 10-end0.link 10-eth0.network /etc/systemd/network/
+# DHCP sets addressing/routing but must never dictate DNS - resolved always
+# falls back to its own (DNS-over-TLS-capable) defaults instead; see
+# 10-eth0.network's [DHCP] UseDNS=no and README.md
+RUN mkdir -p /etc/systemd/resolved.conf.d
+COPY resolved-dns-over-tls.conf /etc/systemd/resolved.conf.d/
 # entrypoint
 RUN systemctl set-default multi-user.target
 
@@ -70,6 +95,6 @@ RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
   && if [ "$RPI_ARCH" = armv7 ]; then \
     pacman -Syu --noconfirm --disable-sandbox --overwrite '*' linux-rpi; \
   else \
-    pacman -Syu --noconfirm --disable-sandbox --overwrite '*' linux-aarch64 uboot-tools \
+    pacman -Syu --noconfirm --disable-sandbox --overwrite '*' linux-aarch64 uboot-tools jre-openjdk-headless jq ddclient libnatpmp \
     && (cd /boot && ./mkscr); \
   fi

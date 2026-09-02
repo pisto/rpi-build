@@ -1,0 +1,48 @@
+#!/bin/bash
+
+# Print the current public IPv4 address via NAT-PMP, for ddclient's
+# usev4=cmdv4/cmdv4= - but only when attached to a specific known LAN.
+#
+# natpmpc's own stdout includes diagnostic lines (e.g. "using gateway :
+# 10.0.0.1") that contain IP-looking substrings which are NOT the public
+# address, so this deliberately extracts only the "Public IP address : ..."
+# line rather than handing ddclient natpmpc's raw output to parse itself.
+#
+# Prints nothing and exits non-zero if the current default gateway doesn't
+# match, if its ARP/neighbor MAC doesn't match (when checked), or if natpmpc
+# itself fails - so ddclient gets no IP and skips the update rather than
+# falling back to some other IP source or registering a wrong address.
+#
+# Configured via environment (e.g. a systemd unit drop-in's Environment=):
+#   EXPECTED_GATEWAY      required - the target LAN's default gateway IP
+#   EXPECTED_GATEWAY_MAC  optional - if set, the gateway's ARP MAC must also
+#                         match (case-insensitive) - a stronger check than
+#                         the gateway IP alone, which common home routers
+#                         often share across unrelated networks
+
+set -euo pipefail
+
+: "${EXPECTED_GATEWAY:?EXPECTED_GATEWAY must be set}"
+
+gw="$(ip -4 route show default | awk '{print $3; exit}')"
+if [[ "${gw}" != "${EXPECTED_GATEWAY}" ]]; then
+  echo "ddclient-natpmp-ip: default gateway is '${gw:-none}', not ${EXPECTED_GATEWAY} - refusing to update" >&2
+  exit 1
+fi
+
+if [[ -n "${EXPECTED_GATEWAY_MAC:-}" ]]; then
+  # force a fresh ARP resolution before reading the neighbor table
+  ping -c1 -W1 "${gw}" >/dev/null 2>&1 || true
+  mac="$(ip neigh show "${gw}" | awk '{print $5; exit}')"
+  if [[ "${mac,,}" != "${EXPECTED_GATEWAY_MAC,,}" ]]; then
+    echo "ddclient-natpmp-ip: gateway ${gw} has MAC '${mac:-unknown}', not ${EXPECTED_GATEWAY_MAC} - refusing to update" >&2
+    exit 1
+  fi
+fi
+
+ip_addr="$(natpmpc | sed -n 's/^Public IP address : //p')"
+if [[ -z "${ip_addr}" ]]; then
+  echo "ddclient-natpmp-ip: natpmpc did not report a public IP" >&2
+  exit 1
+fi
+echo "${ip_addr}"

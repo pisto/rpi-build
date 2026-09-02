@@ -1,0 +1,171 @@
+#!/bin/bash
+
+# Provision one Minecraft server account: a Linux user running a vanilla
+# server as a lingering systemd --user unit, with its data on /srv/minecraft
+# (expected to already be mounted from the external SSD - see
+# /etc/fstab and README.md) instead of the volatile overlay root.
+#
+# Idempotent: safe to re-run for an existing user. Never overwrites
+# server.properties, eula.txt, whitelist.json or ops.json once they exist,
+# so re-running after the account's owner has edited any of those is safe.
+#
+# Usage: mc-provision-user <username> <port>
+
+set -euo pipefail
+
+[[ ${EUID} -eq 0 ]] || exec sudo -- "$0" "$@"
+
+user="${1:?usage: $(basename "$0") <username> <port>}"
+port="${2:?usage: $(basename "$0") <username> <port>}"
+
+datadir="/srv/minecraft/${user}"
+cache="/srv/minecraft/.cache/server.jar"
+
+[[ -d /srv/minecraft ]] || {
+  echo "/srv/minecraft is not mounted - check 'findmnt /srv/minecraft' and /etc/fstab" 1>&2
+  exit 1
+}
+
+if ! id "${user}" &>/dev/null; then
+  useradd -m -s /bin/bash "${user}"
+fi
+uid="$(id -u "${user}")"
+home="$(getent passwd "${user}" | cut -d: -f6)"
+
+mkdir -p "${home}/minecraft" "${home}/.config/systemd/user"
+chown "${user}:${user}" "${home}/minecraft"
+chown -R "${user}:${user}" "${home}/.config"
+
+cat > "${home}/.config/systemd/user/minecraft.service" <<EOF
+[Unit]
+Description=Minecraft
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=%h/minecraft
+
+[Service]
+WorkingDirectory=%h/minecraft
+ExecStart=/usr/bin/java -Xms256M -Xmx1024M -XX:+UseG1GC -XX:MaxGCPauseMillis=130 -XX:G1ReservePercent=20 -XX:InitiatingHeapOccupancyPercent=15 -XX:+ParallelRefProcEnabled -XX:+ExitOnOutOfMemoryError -jar server.jar --nogui
+OOMScoreAdjust=300
+SuccessExitStatus=143
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+chown "${user}:${user}" "${home}/.config/systemd/user/minecraft.service"
+
+# reparent this user's whole --user session tree (and so minecraft.service)
+# into the shared minecraft.slice, instead of its own independent user-<uid>.slice
+mkdir -p "/etc/systemd/system/user@${uid}.service.d"
+cat > "/etc/systemd/system/user@${uid}.service.d/minecraft-slice.conf" <<EOF
+[Service]
+Slice=minecraft.slice
+EOF
+
+# the effect of 'loginctl enable-linger', written directly so it does not
+# depend on a live login session existing yet; loginctl call below also
+# applies it immediately without a reboot
+mkdir -p /var/lib/systemd/linger
+touch "/var/lib/systemd/linger/${user}"
+loginctl enable-linger "${user}"
+
+mkdir -p "${datadir}"
+chown "${user}:${user}" "${datadir}"
+chmod 0700 "${datadir}"
+
+if [[ ! -f "${cache}" ]]; then
+  mkdir -p "$(dirname "${cache}")"
+  manifest="$(curl -fsSL https://piston-meta.mojang.com/mc/game/version_manifest_v2.json)"
+  release="$(jq -r '.latest.release' <<< "${manifest}")"
+  version_url="$(jq -r --arg r "${release}" '.versions[] | select(.id==$r) | .url' <<< "${manifest}")"
+  downloads="$(curl -fsSL "${version_url}" | jq -r '.downloads.server')"
+  server_url="$(jq -r '.url' <<< "${downloads}")"
+  server_sha="$(jq -r '.sha1' <<< "${downloads}")"
+  tmp="$(mktemp)"
+  curl -fsSL -o "${tmp}" "${server_url}"
+  echo "${server_sha}  ${tmp}" | sha1sum -c -
+  mv "${tmp}" "${cache}"
+fi
+[[ -f "${datadir}/server.jar" ]] || cp "${cache}" "${datadir}/server.jar"
+
+[[ -f "${datadir}/eula.txt" ]] || echo "eula=true" > "${datadir}/eula.txt"
+
+if [[ ! -f "${datadir}/server.properties" ]]; then
+  cat > "${datadir}/server.properties" <<EOF
+accepts-transfers=false
+allow-flight=false
+allow-nether=true
+broadcast-console-to-ops=true
+broadcast-rcon-to-ops=true
+bug-report-link=
+difficulty=hard
+enable-code-of-conduct=false
+enable-command-block=false
+enable-jmx-monitoring=false
+enable-query=false
+enable-rcon=false
+enable-status=true
+enforce-secure-profile=true
+enforce-whitelist=true
+entity-broadcast-range-percentage=100
+force-gamemode=true
+function-permission-level=2
+gamemode=survival
+generate-structures=true
+generator-settings={}
+hardcore=false
+hide-online-players=false
+initial-disabled-packs=
+initial-enabled-packs=vanilla
+level-name=${user}
+level-seed=
+level-type=minecraft:normal
+log-ips=true
+management-server-enabled=false
+max-chained-neighbor-updates=1000000
+max-players=5
+max-tick-time=60000
+max-world-size=29999984
+motd=${user} puppa
+network-compression-threshold=256
+online-mode=true
+op-permission-level=4
+pause-when-empty-seconds=60
+player-idle-timeout=0
+prevent-proxy-connections=false
+pvp=true
+query.port=${port}
+rate-limit=0
+region-file-compression=lz4
+require-resource-pack=false
+server-ip=
+server-port=${port}
+simulation-distance=10
+spawn-animals=true
+spawn-monsters=true
+spawn-npcs=true
+spawn-protection=0
+status-heartbeat-interval=0
+sync-chunk-writes=true
+use-native-transport=true
+view-distance=10
+white-list=true
+EOF
+fi
+
+[[ -f "${datadir}/whitelist.json" ]] || echo "[]" > "${datadir}/whitelist.json"
+[[ -f "${datadir}/ops.json" ]] || echo "[]" > "${datadir}/ops.json"
+
+chown -R "${user}:${user}" "${datadir}"
+
+# per-user bind mount from the persistent SSD dir onto the (volatile) home dir
+fstab_line="/srv/minecraft/${user} ${home}/minecraft none x-systemd.requires=/srv/minecraft,nofail,bind 0 0"
+grep -qxF "${fstab_line}" /etc/fstab || echo "${fstab_line}" >> /etc/fstab
+mountpoint -q "${home}/minecraft" || mount "${home}/minecraft"
+
+systemctl daemon-reload
+machinectl shell "${user}@" /usr/bin/systemctl --user enable --now minecraft.service
+
+echo "==> ${user}: minecraft.service enabled and started, port ${port}"
+echo "    Add players to ${datadir}/whitelist.json (whitelist is enforced and currently empty)."

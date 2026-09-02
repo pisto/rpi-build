@@ -4,3 +4,8 @@ Name=eth0
 [Network]
 DHCP=yes
 DNSSEC=no
+
+# accept the DHCP lease for addressing/routing, but never let a DHCP server
+# push its own DNS servers into resolved - see resolved-dns-over-tls.conf
+[DHCP]
+UseDNS=no

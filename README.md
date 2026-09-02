@@ -63,6 +63,92 @@ That still is not enough on its own. `bcmgenet` attaches its PHY in `ndo_open`, 
 
 Wake-on-LAN is not available and cannot be made so: `ethtool` reports `Supports Wake-on: d` for `bcmgenet`, the device exposes no `power/wakeup`, and `/sys/power/mem_sleep` offers only `s2idle` — there is no sleep state to wake from to begin with. Energy Efficient Ethernet needs no attention either; it negotiates itself and reports active on gigabit links.
 
+## Minecraft servers
+
+Each server account is provisioned live with `mc-provision-user <username>
+<port>` (installed at `/usr/local/bin`), run against the running Pi rather
+than from the `Containerfile` — it needs the external SSD (`/dev/sda4`,
+mounted at `/srv/minecraft` via the `nofail` line this image adds to
+`/etc/fstab`) actually attached, which a podman build doesn't have. It
+creates the Linux account, a per-user systemd `--user` unit modelled on a
+plain `java -jar server.jar` (G1GC, `-Xmx1024M`, no JMX, no RCON — the only
+way to stop one account reaching another's admin interface over loopback,
+since Linux has no per-UID ACL on `localhost`, is to not run one at all),
+enables lingering so it starts at boot with no login required, and fetches
+the current latest vanilla server jar. It's idempotent, so it doubles as the
+way to add another account later.
+
+All accounts share one budget rather than each getting a fixed slice:
+`minecraft.slice` caps their *combined* memory at 80% of the Pi's RAM
+(`MemoryHigh=70%` as an earlier throttle point), and gives them low
+`CPUWeight`/`IOWeight` against the rest of the system. `mc-provision-user`
+reparents each account's `user@<uid>.service` into that slice with a
+`Slice=` drop-in — that key is freely overridable on a *service* (only a
+`.slice` unit's own name fixes its place in the hierarchy), so this moves
+the account's whole session tree out of its default `user-<uid>.slice` and
+into the shared one. `systemd-oomd` (enabled by this image, off by default)
+is told to act on that slice under sustained memory pressure
+(`ManagedOOMMemoryPressure=kill`), so a Minecraft process gets killed before
+the kernel's own OOM killer would otherwise have to pick something on the
+whole system. The slice does not cap swap usage — on a box with a swap
+device this lets a JVM spike ride out a squeeze on swap rather than being
+killed outright, at the cost of a GC/latency hit while it's happening.
+`vm.swappiness` is turned down to `10` (from the kernel default of `60`) via
+`99-swappiness.conf`, so the kernel reaches for page cache before swapping
+out active memory — a no-op if a given board has no swap at all, so it's
+part of the base image rather than something bolted on only where a swap
+partition exists. Each server's home directory lives on the volatile overlay
+root like the rest of `/home`; only `~/minecraft` (bind-mounted from
+`/srv/minecraft/<user>` on the SSD) is exempt and actually persists, the
+same pattern already used for `/var/log` above.
+
+GC is G1, not the `ZGC` a hand-run desktop instance might use elsewhere:
+at a 1G heap, ZGC's and Shenandoah's fixed per-region overhead is a much
+bigger fraction of the heap than it would be at multi-GB sizes, and G1 is
+the community-proven choice for small Minecraft heaps. It's still a
+concurrent collector (only evacuation pauses are stop-the-world). There is
+no live-adjustable "soft" heap target under G1 — `-XX:SoftMaxHeapSize` is
+Generational-ZGC-only, and nothing in the kernel/cgroup/systemd stack pushes
+memory pressure into a JVM that isn't explicitly polling for it — so the
+heap doesn't shrink in response to system-wide pressure the way the slice
+above does; it only uncommits unused regions back to the OS once live usage
+drops well below capacity, which is usage- rather than pressure-driven. No
+`-XX:+UseNUMA`: this board has no NUMA nodes, real or otherwise
+(`/sys/devices/system/node/` doesn't exist), so the flag would be a silent
+no-op.
+
+The SSD's own power management was audited, not changed: it already has
+USB/PCIe autosuspend disabled (`power/control=on`) at every level between
+it and the VL805 controller, and PCIe ASPM is at the untouched firmware
+default. Neither is a hand-set override — `60-autosuspend.rules` only
+opts a device into autosuspend when the hwdb explicitly lists it as safe,
+and forcing ASPM L1 states on the Pi 4's internal Broadcom-to-VL805 link is
+a known source of USB3 instability — so both are already at the correct
+setting for a drive holding live world-save data, and are left alone.
+
+## Dynamic DNS
+
+`ddclient` and `libnatpmp` (for `natpmpc`) are installed by the image, along
+with `ddclient-natpmp-ip` at `/usr/local/bin` — everything else (the actual
+`/etc/ddclient/ddclient.conf`, which account/hostname/password it updates,
+and which LAN it's allowed to run on) is instance-specific and configured
+live, not baked in here.
+
+`ddclient-natpmp-ip` is what `ddclient.conf` points `usev4=cmdv4` at instead
+of a web-based IP lookup: it runs `natpmpc` and extracts only its `Public IP
+address : ...` line — `natpmpc`'s own stdout also has diagnostic lines like
+`using gateway : 10.0.0.1` that contain IP-looking substrings that are *not*
+the public address, so handing ddclient the raw output to parse itself would
+risk it grabbing the wrong one. It also gates on the current default gateway
+(`EXPECTED_GATEWAY`, and optionally its ARP MAC via `EXPECTED_GATEWAY_MAC` —
+set through a `ddclient.service.d` drop-in) before ever calling `natpmpc`,
+and prints nothing on any failure. That matters on a board that moves
+between networks: a home router's default gateway IP (`192.168.1.1` and
+similar) is common enough that IP alone doesn't prove which physical network
+you're on, and there is deliberately no fallback IP source — if the gateway
+doesn't match, or `natpmpc`'s target isn't actually NAT-PMP-capable, ddclient
+gets no address and skips that update rather than registering a wrong one.
+
 ## Copying to a SD card
 
 Your SD card device should be defined with the `MEMORY_CARD_DEVICE` environment variable:
