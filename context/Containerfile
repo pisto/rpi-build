@@ -41,6 +41,14 @@ RUN chmod 0755 /usr/local/bin/rpi-wifi-poweroff \
 RUN printf '\n[pi4]\ncore_freq=250\n[all]\n' >> /boot/config.txt \
   && grep -q '^core_freq=250$' /boot/config.txt
 
+# raise the pi4 arm core's max clock from the 1.5GHz stock ceiling - stock
+# voltage, no over_voltage=. 1750 was requested but the firmware rounds any
+# arm_freq up to the nearest 100MHz OPP step (see README.md), landing on 1800.
+# gated to [pi4]: untested on other boards, and arm_freq_min/core_freq/
+# gpu_freq/sdram_freq/over_voltage/temp_limit are all deliberately left alone.
+RUN printf '\n[pi4]\narm_freq=1800\n[all]\n' >> /boot/config.txt \
+  && grep -q '^arm_freq=1800$' /boot/config.txt
+
 # mutable partition
 RUN echo '/dev/mmcblk0p3  /mnt/mutable f2fs defaults,nofail,discard 0 0' >> /etc/fstab
 # make systemd-timesync almost persistent across reboots
