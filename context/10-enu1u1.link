@@ -4,7 +4,4 @@ Driver=lan78xx smsc95xx
 
 [Link]
 AlternativeName=eth0
-# no-op on the 100M-only smsc95xx boards, a real saving on the gigabit lan78xx
-# Advertise=, not BitsPerSecond=: forcing a fixed speed is rejected by these drivers
-# with EINVAL, while restricting what autonegotiation offers settles at 100M and keeps EEE
 Advertise=100baset-full

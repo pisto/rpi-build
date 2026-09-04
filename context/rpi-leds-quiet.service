@@ -1,5 +1,5 @@
 [Unit]
-Description=Re-apply .link advertisement once the PHY is attached
+Description=Re-apply LED-off settings once the ethernet PHY is attached
 After=systemd-networkd.service
 DefaultDependencies=no
 
@@ -7,7 +7,7 @@ DefaultDependencies=no
 Type=oneshot
 RemainAfterExit=yes
 ExecStartPre=/usr/lib/systemd/systemd-networkd-wait-online --interface=eth0 --timeout=60
-ExecStart=/usr/bin/udevadm trigger --action=add --subsystem-match=net
+ExecStart=/usr/bin/systemd-tmpfiles --create /etc/tmpfiles.d/leds-off.conf
 
 [Install]
 WantedBy=multi-user.target

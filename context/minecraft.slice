@@ -1,11 +1,3 @@
-# Combined resource ceiling for all Minecraft server accounts (see
-# mc-provision-user, which reparents each account's user@<uid>.service into
-# this slice instead of its own independent user-<uid>.slice). A joint
-# budget rather than a per-account one: with a hard Xmx per instance and no
-# fixed count of instances, three concurrently-full servers are meant to be
-# oversubscribed against 4G of RAM, and it's this slice plus systemd-oomd
-# (ManagedOOMMemoryPressure=kill) that reclaims under pressure instead of
-# the kernel's global OOM killer taking down unrelated system daemons.
 [Unit]
 Description=Combined resource slice for Minecraft server accounts
 

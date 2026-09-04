@@ -19,11 +19,14 @@ RUN sed -i 's/^ *HOOKS=(\(.*\)) *$/HOOKS=(\1 sd-volatile )/' /etc/mkinitcpio.con
     && grep -q '^setenv bootargs.* ro .*systemd.volatile=overlay$' /boot/boot.txt \
     && grep -q 'fdt set /system linux,revision' /boot/boot.txt; \
   fi
-
-# escape hatch out of the volatile overlay for persistent changes; documented in the README
 COPY boot-rw /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/boot-rw
 
+# clock tuning for power save and turb
+RUN printf '\n[pi4]\ncore_freq=250\n[all]\n' >> /boot/config.txt \
+  && grep -q '^core_freq=250$' /boot/config.txt
+RUN printf '\n[pi4]\narm_freq=1800\n[all]\n' >> /boot/config.txt \
+  && grep -q '^arm_freq=1800$' /boot/config.txt
 # power: scale the cpu on demand instead of pinning it at max, and power down the onboard radios
 COPY cpu-governor.conf /etc/tmpfiles.d/
 COPY no-wireless.conf /etc/modprobe.d/
@@ -34,20 +37,19 @@ COPY rpi-link-advertise.service /etc/systemd/system/
 RUN chmod 0755 /usr/local/bin/rpi-wifi-poweroff \
   && systemctl enable rpi-wifi-poweroff.service \
   && systemctl enable rpi-link-advertise.service
+# LEDs off
+COPY leds-off.conf /etc/tmpfiles.d/
+COPY rpi-leds-quiet.service /etc/systemd/system/
+RUN systemctl enable rpi-leds-quiet.service
 
-# halve the pi4 vpu core clock, overriding the 500MHz pin that enable_uart=1 would otherwise apply
-# gated to [pi4]: the pi2 already runs the core at 250 and the pi3 is untested here
-# enable_uart must stay - without it u-boot hangs on a dead mini-UART before boot.scr runs
-RUN printf '\n[pi4]\ncore_freq=250\n[all]\n' >> /boot/config.txt \
-  && grep -q '^core_freq=250$' /boot/config.txt
+# entrypoint
+RUN systemctl set-default multi-user.target
 
-# raise the pi4 arm core's max clock from the 1.5GHz stock ceiling - stock
-# voltage, no over_voltage=. 1750 was requested but the firmware rounds any
-# arm_freq up to the nearest 100MHz OPP step (see README.md), landing on 1800.
-# gated to [pi4]: untested on other boards, and arm_freq_min/core_freq/
-# gpu_freq/sdram_freq/over_voltage/temp_limit are all deliberately left alone.
-RUN printf '\n[pi4]\narm_freq=1800\n[all]\n' >> /boot/config.txt \
-  && grep -q '^arm_freq=1800$' /boot/config.txt
+# boot with dhcp but set my own dns
+COPY 10-enu1u1.link 10-end0.link 10-eth0.network /etc/systemd/network/
+RUN systemctl disable systemd-networkd-wait-online.service
+RUN mkdir -p /etc/systemd/resolved.conf.d
+COPY resolved-dns-over-tls.conf /etc/systemd/resolved.conf.d/
 
 # mutable partition
 RUN echo '/dev/mmcblk0p3  /mnt/mutable f2fs defaults,nofail,discard 0 0' >> /etc/fstab
@@ -59,39 +61,30 @@ COPY systemd-timesyncd-override.conf /etc/systemd/system/systemd-timesyncd.servi
 # mutable /var/log
 RUN echo '/mnt/mutable/log /var/log none x-systemd.requires=/mnt/mutable,nofail,bind 0 0' >> /etc/fstab
 
-# minecraft servers: data lives on the external SSD (/dev/sda4, already a
-# blank btrfs filesystem labelled "minecraft"), not the volatile overlay
-# root - nofail since the SSD is removable and must not hold up boot.
-# Per-user accounts and their bind mounts are provisioned live with
-# mc-provision-user (needs the SSD attached, which a podman build doesn't
-# have), not created here; see README.md.
-RUN mkdir -p /srv/minecraft \
-  && echo '/dev/sda4 /srv/minecraft btrfs nofail,noatime 0 0' >> /etc/fstab
-# swap on the same external SSD (/dev/sda5) - nofail for the same reason as
-# above; 99-swappiness.conf already biases reclaim toward page cache over
-# using it, so this is pressure relief for JVM spikes, not routine swapping
-RUN echo '/dev/sda5 none swap nofail 0 0' >> /etc/fstab
-COPY minecraft.slice /etc/systemd/system/
-COPY mc-provision-user /usr/local/bin/
-COPY 99-swappiness.conf /etc/sysctl.d/
-RUN chmod 0755 /usr/local/bin/mc-provision-user \
-  && systemctl enable systemd-oomd.service
-
-# dynamic DNS: package + the generic NAT-PMP IP-source script only - actual
-# credentials, target hostname and target-LAN gateway/MAC are instance
-# specific and configured live, not baked in here; see README.md.
+# dynamic DNS public IP fetcher
 COPY ddclient-natpmp-ip /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/ddclient-natpmp-ip
 
-# make reliable eth0 alias for ethernet interface, configure eth0 for automatic dhcp
-COPY 10-enu1u1.link 10-end0.link 10-eth0.network /etc/systemd/network/
-# DHCP sets addressing/routing but must never dictate DNS - resolved always
-# falls back to its own (DNS-over-TLS-capable) defaults instead; see
-# 10-eth0.network's [DHCP] UseDNS=no and README.md
-RUN mkdir -p /etc/systemd/resolved.conf.d
-COPY resolved-dns-over-tls.conf /etc/systemd/resolved.conf.d/
-# entrypoint
-RUN systemctl set-default multi-user.target
+# wireguard VPN server
+COPY wg0.netdev wg0.network /etc/systemd/network/
+RUN chown root:systemd-network /etc/systemd/network/wg0.netdev \
+  && chmod 0640 /etc/systemd/network/wg0.netdev
+RUN mkdir -p /etc/systemd/networkd.conf.d
+COPY networkd-forwarding.conf /etc/systemd/networkd.conf.d/
+COPY nftables.conf /etc/nftables.conf
+RUN systemctl enable nftables.service
+
+# minecraft servers
+RUN mkdir -p /srv/minecraft \
+  && echo '/dev/sda4 /srv/minecraft btrfs nofail,noatime,x-systemd.device-timeout=5 0 0' >> /etc/fstab
+# swap
+RUN echo '/dev/sda5 none swap nofail,x-systemd.device-timeout=5 0 0' >> /etc/fstab \
+  && systemctl enable systemd-oomd.service
+COPY 99-swappiness.conf /etc/sysctl.d/
+# dedicated minecraft slice for system stability
+COPY minecraft.slice /etc/systemd/system/
+COPY mc-provision-user /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/mc-provision-user
 
 # next operations are non reproducible (pacman updates), so label when these were ran, invalidate all cached layers below
 ARG BUILD_DATE
@@ -105,12 +98,9 @@ RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
   && pacman -Rs --noconfirm linux-firmware \
   && rm -f /etc/pacman.d/hooks/90-mkinitcpio-install.hook \
   && if [ "$RPI_ARCH" = armv7 ]; then \
-    pacman -Syu --noconfirm --disable-sandbox --overwrite '*' linux-rpi; \
+    pacman -Sy --noconfirm --disable-sandbox --overwrite '*' linux-rpi; \
   else \
-    # jdk-openjdk (not the headless JRE): jcmd/jstat/jfr need the full JDK's
-    # attach API to inspect the Minecraft JVMs live; perf+numactl are the
-    # tooling used to confirm this board has no NUMA topology and to profile
-    # GC/cache behaviour - see README.md
-    pacman -Syu --noconfirm --disable-sandbox --overwrite '*' linux-aarch64 uboot-tools jdk-openjdk jq ddclient libnatpmp perf numactl \
+    pacman -Sy --noconfirm --disable-sandbox --overwrite '*' linux-aarch64 uboot-tools \
     && (cd /boot && ./mkscr); \
-  fi
+  fi; \
+  pacman -Syu --noconfirm --disable-sandbox --overwrite '*' jdk-openjdk jq ddclient libnatpmp perf wireguard-tools nftables

@@ -1,0 +1,9 @@
+[NetDev]
+Name=wg0
+Kind=wireguard
+
+[WireGuard]
+ListenPort=51820
+PrivateKeyFile=/etc/systemd/network/wg0.key
+
+# Peers are appended here by hand, one [WireGuardPeer] section per enrolled

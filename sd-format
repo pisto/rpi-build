@@ -43,6 +43,8 @@ set -euo pipefail
 
 systemd-machine-id-setup
 ssh-keygen -A
+wg genkey | tee /etc/systemd/network/wg0.key | wg pubkey | tee /etc/systemd/network/wg0.pub
+chmod 600 /etc/systemd/network/wg0.key
 pacman-key --init
 pacman-key --populate archlinuxarm
 mkdir /mnt/mutable/timesync

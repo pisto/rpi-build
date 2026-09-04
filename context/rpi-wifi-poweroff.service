@@ -1,6 +1,5 @@
 [Unit]
 Description=Power down onboard WiFi
-# No-op on boards with no onboard WiFi, such as the Pi 2.
 ConditionPathExistsGlob=/sys/class/mmc_host/mmc*
 
 [Service]
