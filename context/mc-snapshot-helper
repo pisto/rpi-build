@@ -23,8 +23,10 @@ set -uo pipefail
 user="$(getent passwd "${PKEXEC_UID:?must be run via pkexec}" | cut -d: -f1)"
 [[ -n "${user}" ]] || { echo "mc-snapshot-helper: could not resolve PKEXEC_UID=${PKEXEC_UID}" >&2; exit 1; }
 
+home="$(getent passwd "${user}" | cut -d: -f6)"
 datadir="/srv/minecraft/${user}"
 snapdir="/srv/minecraft/.snapshots/${user}"
+livemnt="${home}/minecraft"
 
 name_re='^(auto|keep)-[0-9]{8}T[0-9]{6}(-[A-Za-z0-9_.-]+)?$'
 label_re='^[A-Za-z0-9_.-]+$'
@@ -46,6 +48,21 @@ case "${cmd}" in
     btrfs subvolume show "${datadir}" >/dev/null 2>&1 || {
       echo "mc-snapshot-helper: ${datadir} is not a btrfs subvolume" >&2; exit 1;
     }
+
+    # a successful service-stop doesn't prove every file handle is closed;
+    # remount,ro fails with EBUSY if anything still has a file open for
+    # writing (readers are unaffected), and staying ro for the snapshot's
+    # duration also blocks a new writer (e.g. a manual restart) from racing
+    # in - no service mask needed. "bind" must be restated for a bind
+    # mount's remount, or it spuriously reports busy regardless of opens.
+    if mountpoint -q "${livemnt}"; then
+      mount -o remount,bind,ro "${livemnt}" || {
+        echo "mc-snapshot-helper: ${livemnt} still has open files - refusing" >&2
+        exit 1
+      }
+      trap 'mount -o remount,bind,rw "${livemnt}"' EXIT
+    fi
+
     mkdir -p "${snapdir}"
     ts="$(date +%Y%m%dT%H%M%S)"   # server's local timezone, not UTC
     dest="${snapdir}/auto-${ts}"
@@ -99,20 +116,27 @@ case "${cmd}" in
     btrfs subvolume show "${datadir}" >/dev/null 2>&1 || {
       echo "mc-snapshot-helper: ${datadir} is not a btrfs subvolume" >&2; exit 1;
     }
+
+    # full unmount (not just remount,ro): restore swaps the subvolume that
+    # ~/minecraft is bound to, so the mount needs to be dropped and re-made
+    # fresh afterward anyway - doing it up front doubles as the no-open-files
+    # check
+    was_mounted=0
+    if mountpoint -q "${livemnt}"; then
+      was_mounted=1
+      umount "${livemnt}" || {
+        echo "mc-snapshot-helper: ${livemnt} still has open files - refusing" >&2
+        exit 1
+      }
+    fi
+
     newdir="${datadir}.new"
     btrfs subvolume show "${newdir}" >/dev/null 2>&1 && btrfs subvolume delete "${newdir}"
     btrfs subvolume snapshot "${src}" "${newdir}"   # writable clone, not a copy
     btrfs subvolume delete "${datadir}"
     mv "${newdir}" "${datadir}"
     chown -R "${user}:${user}" "${datadir}"
-    # an already-active bind mount doesn't retarget when the subvolume behind
-    # it is swapped out - remount so ~/minecraft doesn't keep resolving to
-    # the deleted one
-    homedir="$(getent passwd "${user}" | cut -d: -f6)"
-    if mountpoint -q "${homedir}/minecraft"; then
-      umount "${homedir}/minecraft"
-      mount "${homedir}/minecraft"
-    fi
+    (( was_mounted )) && mount "${livemnt}"
     ;;
 
   *)
