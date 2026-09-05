@@ -32,6 +32,10 @@ fi
 uid="$(id -u "${user}")"
 home="$(getent passwd "${user}" | cut -d: -f6)"
 
+# membership authorizes mc-snapshot-helper via pkexec, see 49-mc-snapshot.rules
+getent group mcusers >/dev/null || groupadd mcusers
+usermod -aG mcusers "${user}"
+
 mkdir -p "${home}/minecraft" "${home}/.config/systemd/user"
 chown "${user}:${user}" "${home}/minecraft"
 chown -R "${user}:${user}" "${home}/.config"
@@ -70,7 +74,15 @@ mkdir -p /var/lib/systemd/linger
 touch "/var/lib/systemd/linger/${user}"
 loginctl enable-linger "${user}"
 
-mkdir -p "${datadir}"
+if btrfs subvolume show "${datadir}" &>/dev/null; then
+  : # already a subvolume, nothing to do
+elif [[ -d "${datadir}" ]]; then
+  echo "${datadir} exists but is not a btrfs subvolume - this looks like a" \
+       "pre-migration account; run mc-migrate-to-subvolume ${user} first" 1>&2
+  exit 1
+else
+  btrfs subvolume create "${datadir}"
+fi
 chown "${user}:${user}" "${datadir}"
 chmod 0700 "${datadir}"
 
@@ -164,8 +176,62 @@ fstab_line="/srv/minecraft/${user} ${home}/minecraft none x-systemd.requires=/sr
 grep -qxF "${fstab_line}" /etc/fstab || echo "${fstab_line}" >> /etc/fstab
 mountpoint -q "${home}/minecraft" || mount "${home}/minecraft"
 
+# snapshot storage: plain dir nesting subvolumes named <class>-<ts>[-<label>].
+# root:<user> 0750 so mutation only happens via mc-snapshot-helper, not by hand
+snapdir="/srv/minecraft/.snapshots/${user}"
+mkdir -p "${snapdir}"
+chown root:"${user}" "${snapdir}"
+chmod 0750 "${snapdir}"
+
+mkdir -p "${home}/minecraft-snapshots"
+# skip once the ro bind mount is active - chown would fail (read-only fs)
+# and isn't needed then, since visible ownership already comes from snapdir
+mountpoint -q "${home}/minecraft-snapshots" || chown "${user}:${user}" "${home}/minecraft-snapshots"
+snap_fstab_line="${snapdir} ${home}/minecraft-snapshots none x-systemd.requires=/srv/minecraft,nofail,bind,ro 0 0"
+grep -qxF "${snap_fstab_line}" /etc/fstab || echo "${snap_fstab_line}" >> /etc/fstab
+mountpoint -q "${home}/minecraft-snapshots" || mount "${home}/minecraft-snapshots"
+
+cat > "${home}/.config/systemd/user/mc-snapshot.service" <<EOF
+[Unit]
+Description=Daily btrfs snapshot of my Minecraft world
+RequiresMountsFor=%h/minecraft
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mc-snapshot --wait-for-empty
+TimeoutStartSec=90min
+EOF
+chown "${user}:${user}" "${home}/.config/systemd/user/mc-snapshot.service"
+
+cat > "${home}/.config/systemd/user/mc-snapshot.timer" <<EOF
+[Unit]
+Description=Daily timer for my Minecraft btrfs snapshot
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=default.target
+EOF
+chown "${user}:${user}" "${home}/.config/systemd/user/mc-snapshot.timer"
+
+# append idempotently rather than skip-if-exists: useradd's skel already
+# ships a .bash_profile, so a re-run must still add the motd line to it
+touch "${home}/.bash_profile"
+motd_line='[[ -f /etc/mc-motd.txt ]] && cat /etc/mc-motd.txt'
+grep -qxF "${motd_line}" "${home}/.bash_profile" || echo "${motd_line}" >> "${home}/.bash_profile"
+chown "${user}:${user}" "${home}/.bash_profile"
+
 systemctl daemon-reload
+# the user's own --user manager is a separate process and needs its own reload
+machinectl shell "${user}@" /usr/bin/systemctl --user daemon-reload
 machinectl shell "${user}@" /usr/bin/systemctl --user enable --now minecraft.service
+# restart, not just enable --now: an already-active timer won't otherwise
+# recompute its schedule after an OnCalendar change
+machinectl shell "${user}@" /usr/bin/systemctl --user enable mc-snapshot.timer
+machinectl shell "${user}@" /usr/bin/systemctl --user restart mc-snapshot.timer
 
 echo "==> ${user}: minecraft.service enabled and started, port ${port}"
 echo "    Add players to ${datadir}/whitelist.json (whitelist is enforced and currently empty)."

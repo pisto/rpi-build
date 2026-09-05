@@ -1,0 +1,117 @@
+#!/bin/bash
+
+# Server List Ping (the unauthenticated status handshake a vanilla client uses
+# to show "3/20 players online" in the multiplayer list) against a Minecraft
+# server's normal game port. No RCON, no query protocol, no server.properties
+# changes, no new network surface - just the same read any client can already
+# do. Prints "<online> <max>" on success.
+#
+# Exit codes: 0 success; 2 connection refused (nothing listening - safe to
+# treat as "definitely empty"); 1 any other failure (timeout/malformed - treat
+# as "unknown, retry").
+#
+# Usage: mc-status-players <host> <port> [timeout-seconds]
+
+set -uo pipefail
+
+host="${1:?usage: mc-status-players <host> <port> [timeout]}"
+port="${2:?usage: mc-status-players <host> <port> [timeout]}"
+to="${3:-5}"
+
+if ! { exec 3<>"/dev/tcp/${host}/${port}"; } 2>/dev/null; then
+  exit 2
+fi
+
+# Built as one string of "\xHH" escape tokens (bash variables can't hold raw
+# NUL bytes) and flushed in a single printf '%b' write, so it reaches the
+# peer as one TCP segment rather than several small writes.
+buf=""
+
+varint_len() {
+  local v=$1 n=0
+  while :; do
+    n=$((n + 1))
+    v=$((v >> 7))
+    ((v == 0)) && break
+  done
+  echo "${n}"
+}
+
+add_varint() {
+  local v=$1 b
+  while :; do
+    b=$((v & 0x7f))
+    v=$((v >> 7))
+    if ((v != 0)); then
+      buf+="\\x$(printf '%02x' $((b | 0x80)))"
+    else
+      buf+="\\x$(printf '%02x' "${b}")"
+      break
+    fi
+  done
+}
+
+add_ushort() {
+  local p=$1
+  buf+="\\x$(printf '%02x' $(((p >> 8) & 0xff)))\\x$(printf '%02x' $((p & 0xff)))"
+}
+
+add_string() {
+  local s=$1
+  add_varint "${#s}"
+  buf+="${s}"   # plain ASCII address text, never contains a NUL
+}
+
+addr="localhost"
+addr_len=${#addr}
+pkt_id_len=$(varint_len 0)
+proto_len=$(varint_len 0)
+addrlen_len=$(varint_len "${addr_len}")
+nextstate_len=$(varint_len 1)
+handshake_len=$((pkt_id_len + proto_len + addrlen_len + addr_len + 2 + nextstate_len))
+
+add_varint "${handshake_len}"
+add_varint 0        # packet id: handshake
+add_varint 0        # protocol version (ignored by the server for a status request)
+add_string "${addr}"
+add_ushort "${port}"
+add_varint 1        # next state: status
+
+# status request packet: id 0, empty body
+add_varint 1
+add_varint 0
+
+printf '%b' "${buf}" >&3
+
+# Captured as hex since the response's packet-id byte is 0x00 (would
+# NUL-truncate a plain variable read). The server keeps the connection open
+# waiting for an optional ping packet, so this blocks for the full timeout.
+hex="$(timeout "${to}" cat <&3 2>/dev/null | od -An -v -tx1 | tr -d ' \n')"
+exec 3<&- 3>&- 2>/dev/null || true
+[[ -n "${hex}" ]] || exit 1
+
+read_varint() { # $1=hex $2=offset(hex chars) -> "value newoffset"
+  local h=$1 off=$2 val=0 sh=0 b
+  while :; do
+    ((off + 2 <= ${#h})) || { echo "0 -1"; return; }
+    b=$((16#${h:off:2}))
+    off=$((off + 2))
+    val=$((val | ((b & 0x7f) << sh)))
+    sh=$((sh + 7))
+    ((b & 0x80)) || break
+  done
+  echo "${val} ${off}"
+}
+
+read -r _       off <<<"$(read_varint "${hex}" 0)"          # frame length (unused)
+read -r _       off <<<"$(read_varint "${hex}" "${off}")"   # packet id (0 = status response)
+read -r jsonlen off <<<"$(read_varint "${hex}" "${off}")"
+((off >= 0)) || exit 1
+jsonhex="${hex:off:$((jsonlen * 2))}"
+[[ -n "${jsonhex}" ]] || exit 1
+
+json="$(printf '%b' "$(sed 's/\(..\)/\\x\1/g' <<<"${jsonhex}")")"
+online="$(jq -r '.players.online // empty' <<<"${json}" 2>/dev/null)"
+maxp="$(jq -r '.players.max // empty' <<<"${json}" 2>/dev/null)"
+[[ "${online}" =~ ^[0-9]+$ ]] || exit 1
+echo "${online} ${maxp:-0}"

@@ -1,0 +1,122 @@
+#!/bin/bash
+
+# The only privileged step in the Minecraft btrfs snapshot system - everything
+# else (the daily timer, the player-online check, stopping/starting the
+# server) runs unprivileged as the account itself. This script must only ever
+# be invoked via `pkexec /usr/local/bin/mc-snapshot-helper <subcommand> ...`,
+# gated by com.rpi.mc-snapshot-helper.policy + 49-mc-snapshot.rules.
+#
+# Identity is resolved from $PKEXEC_UID (set by pkexec itself, never from an
+# argument), so no argument can name a different user's data. Every existing-
+# snapshot argument is validated against name_re before use.
+#
+# Snapshot naming: <class>-<timestamp>[-<label>], e.g. auto-20260905T060000
+# or keep-20260905T060000-before-nether-reset (timestamps are the server's
+# local time, not UTC). class is "auto" (created by the daily timer, subject
+# to 7-day rotation) or "keep" (pinned, never auto-pruned). The timestamp is
+# deliberately dash-free so splitting on "-" gives exactly class as field 1
+# and the full timestamp as field 2 regardless of whatever optional label
+# follows in field 3+.
+
+set -uo pipefail
+
+user="$(getent passwd "${PKEXEC_UID:?must be run via pkexec}" | cut -d: -f1)"
+[[ -n "${user}" ]] || { echo "mc-snapshot-helper: could not resolve PKEXEC_UID=${PKEXEC_UID}" >&2; exit 1; }
+
+datadir="/srv/minecraft/${user}"
+snapdir="/srv/minecraft/.snapshots/${user}"
+
+name_re='^(auto|keep)-[0-9]{8}T[0-9]{6}(-[A-Za-z0-9_.-]+)?$'
+label_re='^[A-Za-z0-9_.-]+$'
+
+require_stopped() {
+  if systemctl --user -M "${user}@" is-active --quiet minecraft.service 2>/dev/null; then
+    echo "mc-snapshot-helper: ${user}'s minecraft.service is still active - refusing" >&2
+    exit 1
+  fi
+}
+
+cmd="${1:?usage: mc-snapshot-helper snapshot|keep|delete|restore ...}"
+shift
+
+case "${cmd}" in
+  snapshot)
+    require_stopped
+    [[ -d "${datadir}" ]] || { echo "mc-snapshot-helper: no such datadir ${datadir}" >&2; exit 1; }
+    btrfs subvolume show "${datadir}" >/dev/null 2>&1 || {
+      echo "mc-snapshot-helper: ${datadir} is not a btrfs subvolume" >&2; exit 1;
+    }
+    mkdir -p "${snapdir}"
+    ts="$(date +%Y%m%dT%H%M%S)"   # server's local timezone, not UTC
+    dest="${snapdir}/auto-${ts}"
+    # no chown needed: a snapshot's root inode inherits the source's
+    # ownership as part of the COW clone
+    btrfs subvolume snapshot -r "${datadir}" "${dest}"
+    echo "${dest##*/}"
+
+    mapfile -t autos < <(
+      find "${snapdir}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' |
+        awk -F- '$1 == "auto"' | sort -t- -k2,2
+    )
+    stale=$(( ${#autos[@]} - 7 ))
+    if (( stale > 0 )); then
+      for old in "${autos[@]:0:stale}"; do
+        btrfs subvolume delete "${snapdir}/${old}"
+      done
+    fi
+    ;;
+
+  keep)
+    existing="${1:?usage: mc-snapshot-helper keep <existing-name> [label]}"
+    label="${2:-}"
+    [[ "${existing}" =~ ${name_re} ]] || { echo "mc-snapshot-helper: bad name" >&2; exit 1; }
+    src="${snapdir}/${existing}"
+    [[ -d "${src}" ]] || { echo "mc-snapshot-helper: no such snapshot ${existing}" >&2; exit 1; }
+    ts="$(cut -d- -f2 <<<"${existing}")"
+    dest="${snapdir}/keep-${ts}"
+    if [[ -n "${label}" ]]; then
+      [[ "${label}" =~ ${label_re} ]] || { echo "mc-snapshot-helper: bad label" >&2; exit 1; }
+      dest="${dest}-${label}"
+    fi
+    mv -n "${src}" "${dest}"
+    echo "${dest##*/}"
+    ;;
+
+  delete)
+    existing="${1:?usage: mc-snapshot-helper delete <existing-name>}"
+    [[ "${existing}" =~ ${name_re} ]] || { echo "mc-snapshot-helper: bad name" >&2; exit 1; }
+    src="${snapdir}/${existing}"
+    [[ -d "${src}" ]] || { echo "mc-snapshot-helper: no such snapshot ${existing}" >&2; exit 1; }
+    btrfs subvolume delete "${src}"
+    ;;
+
+  restore)
+    existing="${1:?usage: mc-snapshot-helper restore <existing-name>}"
+    [[ "${existing}" =~ ${name_re} ]] || { echo "mc-snapshot-helper: bad name" >&2; exit 1; }
+    src="${snapdir}/${existing}"
+    [[ -d "${src}" ]] || { echo "mc-snapshot-helper: no such snapshot ${existing}" >&2; exit 1; }
+    require_stopped
+    btrfs subvolume show "${datadir}" >/dev/null 2>&1 || {
+      echo "mc-snapshot-helper: ${datadir} is not a btrfs subvolume" >&2; exit 1;
+    }
+    newdir="${datadir}.new"
+    btrfs subvolume show "${newdir}" >/dev/null 2>&1 && btrfs subvolume delete "${newdir}"
+    btrfs subvolume snapshot "${src}" "${newdir}"   # writable clone, not a copy
+    btrfs subvolume delete "${datadir}"
+    mv "${newdir}" "${datadir}"
+    chown -R "${user}:${user}" "${datadir}"
+    # an already-active bind mount doesn't retarget when the subvolume behind
+    # it is swapped out - remount so ~/minecraft doesn't keep resolving to
+    # the deleted one
+    homedir="$(getent passwd "${user}" | cut -d: -f6)"
+    if mountpoint -q "${homedir}/minecraft"; then
+      umount "${homedir}/minecraft"
+      mount "${homedir}/minecraft"
+    fi
+    ;;
+
+  *)
+    echo "mc-snapshot-helper: unknown subcommand ${cmd}" >&2
+    exit 1
+    ;;
+esac

@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# Replace your live Minecraft world with a chosen snapshot. Interactive,
+# run by hand - never by a timer.
+#
+# Usage: mc-restore <snapshot-name> [--yes] [--no-safety-snapshot]
+
+set -uo pipefail
+
+name="${1:?usage: mc-restore <snapshot-name> [--yes] [--no-safety-snapshot]}"
+shift
+
+yes=0
+safety=1
+for a in "$@"; do
+  [[ "${a}" == "--yes" ]] && yes=1
+  [[ "${a}" == "--no-safety-snapshot" ]] && safety=0
+done
+
+echo "WARNING: this replaces your CURRENT Minecraft world with snapshot '${name}'."
+echo "Your current world is destroyed by this operation."
+if (( safety )); then
+  echo "A fresh snapshot of your current world will be taken first (kept for the"
+  echo "normal 7-day retention, same as any daily snapshot) so you can undo this"
+  echo "if needed - unless you pass --no-safety-snapshot."
+else
+  echo "--no-safety-snapshot given: your current world will NOT be saved anywhere."
+fi
+
+if (( ! yes )); then
+  read -r -p "Type 'yes' to continue: " confirm
+  [[ "${confirm}" == "yes" ]] || { echo "Aborted."; exit 1; }
+fi
+
+systemctl --user stop minecraft.service
+trap 'systemctl --user start minecraft.service' EXIT
+
+(( safety )) && pkexec /usr/local/bin/mc-snapshot-helper snapshot
+pkexec /usr/local/bin/mc-snapshot-helper restore "${name}"

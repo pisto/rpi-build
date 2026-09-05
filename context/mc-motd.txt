@@ -1,0 +1,18 @@
+=== Minecraft account notes ===
+Everything in your home directory EXCEPT ~/minecraft and ~/minecraft-snapshots
+is wiped on every reboot (this Pi boots from a read-only/volatile root) - keep
+anything you care about inside ~/minecraft.
+
+Nightly backups keep the last 7 days as read-only snapshots under
+~/minecraft-snapshots/ (e.g. auto-20260905T060000). They skip/delay while
+players are online.
+
+Server control:
+  systemctl --user stop minecraft      # stop your server
+  systemctl --user start minecraft     # start it back up
+
+Backups (list current ones: ls ~/minecraft-snapshots):
+  mc-snapshot                                      # back up now (stops your server immediately)
+  pkexec mc-snapshot-helper keep auto-<ts> <label> # keep one forever
+  pkexec mc-snapshot-helper delete <name>          # delete one
+  mc-restore <name>                                # restore one (asks first, destructive)

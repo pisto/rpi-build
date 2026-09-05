@@ -1,0 +1,8 @@
+// Grants com.rpi.mc-snapshot-helper (see com.rpi.mc-snapshot-helper.policy)
+// to mcusers members with no interactive prompt - needed since this runs
+// unattended from each account's own timer.
+polkit.addRule(function(action, subject) {
+    if (action.id == "com.rpi.mc-snapshot-helper" && subject.isInGroup("mcusers")) {
+        return polkit.Result.YES;
+    }
+});

@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# Take a backup of your own Minecraft world. Runs as the account itself,
+# never as root.
+#
+# Usage: mc-snapshot [--wait-for-empty]
+#   (no flag)         stop the server now and back up immediately
+#   --wait-for-empty  used by mc-snapshot.timer: retry every 10m (up to 6x)
+#                     until no players are online, then back up
+
+set -uo pipefail
+
+wait_for_empty=0
+for a in "$@"; do
+  [[ "${a}" == "--wait-for-empty" ]] && wait_for_empty=1
+done
+
+if (( wait_for_empty )); then
+  port="$(awk -F= '/^server-port=/{print $2}' ~/minecraft/server.properties)"
+  attempt=1
+  max_attempts=6
+  while :; do
+    out="$(mc-status-players 127.0.0.1 "${port}" 5)"
+    rc=$?
+    if (( rc == 2 )); then
+      break   # nothing listening - definitely empty
+    elif (( rc == 0 )); then
+      read -r online _ <<<"${out}"
+      (( online == 0 )) && break
+    fi
+    if (( attempt >= max_attempts )); then
+      logger -t mc-snapshot "players still online after ${max_attempts} checks (~1h), skipping today's snapshot"
+      exit 0
+    fi
+    logger -t mc-snapshot "players online, waiting 10m (attempt ${attempt}/${max_attempts})"
+    sleep 10m
+    attempt=$((attempt + 1))
+  done
+fi
+
+restarted=0
+restart_server() {
+  (( restarted )) && return
+  restarted=1
+  systemctl --user start minecraft.service
+}
+trap restart_server EXIT
+
+systemctl --user stop minecraft.service
+pkexec /usr/local/bin/mc-snapshot-helper snapshot

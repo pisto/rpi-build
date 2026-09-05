@@ -83,8 +83,13 @@ RUN echo '/dev/sda5 none swap nofail,x-systemd.device-timeout=5 0 0' >> /etc/fst
 COPY 99-swappiness.conf /etc/sysctl.d/
 # dedicated minecraft slice for system stability
 COPY minecraft.slice /etc/systemd/system/
-COPY mc-provision-user /usr/local/bin/
-RUN chmod 0755 /usr/local/bin/mc-provision-user
+COPY mc-provision-user mc-status-players mc-snapshot mc-restore mc-snapshot-helper /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/mc-provision-user /usr/local/bin/mc-status-players \
+    /usr/local/bin/mc-snapshot /usr/local/bin/mc-restore /usr/local/bin/mc-snapshot-helper
+# polkit authorization for mc-snapshot-helper (no sudo on this image)
+COPY com.rpi.mc-snapshot-helper.policy /usr/share/polkit-1/actions/
+COPY 49-mc-snapshot.rules /etc/polkit-1/rules.d/
+COPY mc-motd.txt /etc/
 
 # next operations are non reproducible (pacman updates), so label when these were ran, invalidate all cached layers below
 ARG BUILD_DATE
@@ -103,4 +108,4 @@ RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
     pacman -Sy --noconfirm --disable-sandbox --overwrite '*' linux-aarch64 uboot-tools \
     && (cd /boot && ./mkscr); \
   fi; \
-  pacman -Syu --noconfirm --disable-sandbox --overwrite '*' jdk-openjdk jq ddclient libnatpmp perf wireguard-tools nftables
+  pacman -Syu --noconfirm --disable-sandbox --overwrite '*' jdk-openjdk jq ddclient libnatpmp perf wireguard-tools nftables btrfs-progs

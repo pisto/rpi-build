@@ -50,3 +50,7 @@ Use the `sd-mount` script to mount your memory card in the `mounts/${device}` di
 ## Modifying the SD card installation
 
 Use the [`sd-exec`](./sd-exec) script to login as root inside the mounted SD partitions. You can perform for example updates in this way.
+
+## Minecraft accounts
+
+To get a proper shell for a Minecraft account (real login session, correct `XDG_RUNTIME_DIR`, works even without an SSH key set up for that user), use `machinectl shell <user>@`.
