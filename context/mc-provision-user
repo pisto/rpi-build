@@ -210,11 +210,13 @@ Description=Daily timer for my Minecraft btrfs snapshot
 [Timer]
 OnCalendar=*-*-* 06:00:00
 RandomizedDelaySec=30min
-Persistent=true
 
 [Install]
 WantedBy=default.target
 EOF
+# no Persistent=true: its catch-up stamp lives under the (volatile) home dir,
+# so it never survives a reboot to tell whether today's run already
+# happened - it would just fire an extra snapshot on every boot instead
 chown "${user}:${user}" "${home}/.config/systemd/user/mc-snapshot.timer"
 
 # append idempotently rather than skip-if-exists: useradd's skel already

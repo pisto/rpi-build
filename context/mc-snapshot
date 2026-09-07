@@ -16,6 +16,17 @@ for a in "$@"; do
 done
 
 if (( wait_for_empty )); then
+  # the timer can fire more than once in a day (e.g. a restart or a missed
+  # RandomizedDelaySec window on a box with no RTC) - a manual run always
+  # takes a fresh snapshot regardless, but the timer path stays a no-op once
+  # today's is already done
+  shopt -s nullglob
+  today=(~/minecraft-snapshots/auto-"$(date +%Y%m%d)"T*)
+  if (( ${#today[@]} > 0 )); then
+    logger -t mc-snapshot "already have today's snapshot (${today[0]##*/}), skipping"
+    exit 0
+  fi
+
   port="$(awk -F= '/^server-port=/{print $2}' ~/minecraft/server.properties)"
   attempt=1
   max_attempts=6
