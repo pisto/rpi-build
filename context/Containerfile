@@ -61,6 +61,13 @@ COPY systemd-timesyncd-override.conf /etc/systemd/system/systemd-timesyncd.servi
 # mutable /var/log
 RUN echo '/mnt/mutable/log /var/log none x-systemd.requires=/mnt/mutable,nofail,bind 0 0' >> /etc/fstab
 
+# Persistent=yes timers' catch-up stamp lives under /var/lib/systemd/timers,
+# which (unlike timesync/log above) isn't bind-mounted to /mnt/mutable - so it
+# never survives a reboot, and every boot looks like a missed run
+COPY no-persistent-timer.conf /etc/systemd/system/fstrim.timer.d/override.conf
+COPY no-persistent-timer.conf /etc/systemd/system/shadow.timer.d/override.conf
+COPY no-persistent-timer.conf /etc/systemd/system/archlinux-keyring-wkd-sync.timer.d/override.conf
+
 # dynamic DNS public IP fetcher
 COPY ddclient-natpmp-ip /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/ddclient-natpmp-ip
@@ -76,7 +83,8 @@ RUN systemctl enable nftables.service
 
 # minecraft servers
 RUN mkdir -p /srv/minecraft \
-  && echo '/dev/sda4 /srv/minecraft btrfs nofail,noatime,x-systemd.device-timeout=5 0 0' >> /etc/fstab
+  && echo '/dev/sda4 /srv/minecraft btrfs nofail,noatime,x-systemd.device-timeout=5 0 0' >> /etc/fstab \
+  && systemctl enable fstrim.timer
 # swap
 RUN echo '/dev/sda5 none swap nofail,x-systemd.device-timeout=5 0 0' >> /etc/fstab \
   && systemctl enable systemd-oomd.service
