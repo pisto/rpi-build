@@ -89,6 +89,8 @@ RUN mkdir -p /srv/minecraft \
 RUN echo '/dev/sda5 none swap nofail,x-systemd.device-timeout=5 0 0' >> /etc/fstab \
   && systemctl enable systemd-oomd.service
 COPY 99-swappiness.conf /etc/sysctl.d/
+# compressed RAM cache in front of /dev/sda5
+COPY zswap.conf /etc/tmpfiles.d/
 # dedicated minecraft slice for system stability
 COPY minecraft.slice /etc/systemd/system/
 COPY mc-provision-user mc-status-players mc-snapshot mc-restore mc-snapshot-helper /usr/local/bin/
