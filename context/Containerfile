@@ -60,6 +60,11 @@ RUN mkdir /var/lib/systemd/timesync \
 COPY systemd-timesyncd-override.conf /etc/systemd/system/systemd-timesyncd.service.d/override.conf
 # mutable /var/log
 RUN echo '/mnt/mutable/log /var/log none x-systemd.requires=/mnt/mutable,nofail,bind 0 0' >> /etc/fstab
+# the default cap (10% of the partition) fills up fast: with no RTC, every boot
+# logs with systemd's build-time clock until timesyncd restores the saved one,
+# which journald treats as the clock jumping backwards and rotates (>= 8M each)
+RUN mkdir -p /etc/systemd/journald.conf.d
+COPY journald-max-use.conf /etc/systemd/journald.conf.d/
 
 # Persistent=yes timers' catch-up stamp lives under /var/lib/systemd/timers,
 # which (unlike timesync/log above) isn't bind-mounted to /mnt/mutable - so it
