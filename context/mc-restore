@@ -21,7 +21,7 @@ echo "WARNING: this replaces your CURRENT Minecraft world with snapshot '${name}
 echo "Your current world is destroyed by this operation."
 if (( safety )); then
   echo "A fresh snapshot of your current world will be taken first (kept for the"
-  echo "normal 7-day retention, same as any daily snapshot) so you can undo this"
+  echo "normal 7-snapshot retention, same as any daily snapshot) so you can undo this"
   echo "if needed - unless you pass --no-safety-snapshot."
 else
   echo "--no-safety-snapshot given: your current world will NOT be saved anywhere."

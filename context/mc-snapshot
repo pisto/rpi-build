@@ -6,7 +6,8 @@
 # Usage: mc-snapshot [--wait-for-empty]
 #   (no flag)         stop the server now and back up immediately
 #   --wait-for-empty  used by mc-snapshot.timer: retry every 10m (up to 6x)
-#                     until no players are online, then back up
+#                     until no players are online, then back up - unless
+#                     the server hasn't run since the newest snapshot
 
 set -uo pipefail
 
@@ -16,6 +17,12 @@ for a in "$@"; do
 done
 
 if (( wait_for_empty )); then
+  # e.g. right after boot, before the bind mount is up
+  mountpoint -q ~/minecraft || {
+    logger -t mc-snapshot "~/minecraft is not mounted, skipping"
+    exit 1
+  }
+
   # the timer can fire more than once in a day (e.g. a restart or a missed
   # RandomizedDelaySec window on a box with no RTC) - a manual run always
   # takes a fresh snapshot regardless, but the timer path stays a no-op once
@@ -25,6 +32,25 @@ if (( wait_for_empty )); then
   if (( ${#today[@]} > 0 )); then
     logger -t mc-snapshot "already have today's snapshot (${today[0]##*/}), skipping"
     exit 0
+  fi
+
+  # skip if the server hasn't been started since the newest snapshot. Unit
+  # timestamps only cover this user manager's lifetime (i.e. this boot), so
+  # a snapshot older than that always gets a successor. Monotonic clocks
+  # throughout, since the realtime clock is unreliable early in boot (no RTC)
+  latest="$(find ~/minecraft-snapshots -mindepth 1 -maxdepth 1 -type d -printf '%f\n' |
+    cut -d- -f2 | sort | tail -n1)"
+  state="$(systemctl --user show minecraft.service -P ActiveState)"
+  if [[ -n "${latest}" && ( "${state}" == inactive || "${state}" == failed ) ]]; then
+    snap_real="$(date -d "${latest:0:8} ${latest:9:2}:${latest:11:2}:${latest:13:2}" +%s)"
+    read -r uptime _ </proc/uptime
+    snap_mono=$(( (snap_real - $(date +%s) + ${uptime%.*}) * 1000000 ))
+    manager_mono="$(systemctl show "user@${UID}.service" -P InactiveExitTimestampMonotonic)"
+    started_mono="$(systemctl --user show minecraft.service -P InactiveExitTimestampMonotonic)"
+    if (( ${manager_mono:-0} > 0 && snap_mono > manager_mono && started_mono < snap_mono )); then
+      logger -t mc-snapshot "server not run since ${latest}, skipping today's snapshot"
+      exit 0
+    fi
   fi
 
   port="$(awk -F= '/^server-port=/{print $2}' ~/minecraft/server.properties)"
@@ -49,13 +75,9 @@ if (( wait_for_empty )); then
   done
 fi
 
-restarted=0
-restart_server() {
-  (( restarted )) && return
-  restarted=1
-  systemctl --user start minecraft.service
-}
-trap restart_server EXIT
-
-systemctl --user stop minecraft.service
+# leave a server that was already stopped stopped
+if systemctl --user is-active --quiet minecraft.service; then
+  trap 'systemctl --user start minecraft.service' EXIT
+  systemctl --user stop minecraft.service
+fi
 pkexec /usr/local/bin/mc-snapshot-helper snapshot

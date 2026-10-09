@@ -3,9 +3,9 @@ Everything in your home directory EXCEPT ~/minecraft and ~/minecraft-snapshots
 is wiped on every reboot (this Pi boots from a read-only/volatile root) - keep
 anything you care about inside ~/minecraft.
 
-Nightly backups keep the last 7 days as read-only snapshots under
+Nightly backups keep the last 7 as read-only snapshots under
 ~/minecraft-snapshots/ (e.g. auto-20260905T060000). They skip/delay while
-players are online.
+players are online, and skip entirely if the server has not run since the last one.
 
 Server control:
   systemctl --user stop minecraft      # stop your server

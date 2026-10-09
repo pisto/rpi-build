@@ -13,7 +13,7 @@
 # Snapshot naming: <class>-<timestamp>[-<label>], e.g. auto-20260905T060000
 # or keep-20260905T060000-before-nether-reset (timestamps are the server's
 # local time, not UTC). class is "auto" (created by the daily timer, subject
-# to 7-day rotation) or "keep" (pinned, never auto-pruned). The timestamp is
+# to 7-snapshot rotation) or "keep" (pinned, never auto-pruned). The timestamp is
 # deliberately dash-free so splitting on "-" gives exactly class as field 1
 # and the full timestamp as field 2 regardless of whatever optional label
 # follows in field 3+.
