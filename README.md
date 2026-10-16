@@ -51,6 +51,22 @@ Use the `sd-mount` script to mount your memory card in the `mounts/${device}` di
 
 Use the [`sd-exec`](./sd-exec) script to login as root inside the mounted SD partitions. You can perform for example updates in this way.
 
+## Device tree overlays
+
+On the Pi 4 (aarch64), `dtoverlay=` in `config.txt` has no effect. The firmware applies it to its own device tree, but U-Boot boots the kernel with the mainline one from `/boot/dtbs`, so overlays are applied by U-Boot instead, in [`boot-fdt-fixups.txt`](./context/boot-fdt-fixups.txt). They are compiled at build time into `/boot/overlays`, and are written against mainline labels, so downstream `.dtbo` files from `linux-rpi` will not necessarily apply. A failing overlay is skipped and the boot goes on.
+
+[`rpi-fans.dts`](./context/rpi-fans.dts) drives two 4-pin fans at 25 kHz on PWM0, each with its tachometer, through the `pwm-fan` driver:
+
+| header pin | GPIO | signal    |
+|-----------:|-----:|-----------|
+| 31         | 6    | fan0 tach |
+| 32         | 12   | fan0 PWM  |
+| 33         | 13   | fan1 PWM  |
+| 34         | –    | GND       |
+| 35         | 19   | fan1 tach |
+
+Each fan is a hwmon device under `/sys/devices/platform/fan-N/hwmon/hwmon*/`: `pwm1` sets the duty cycle (0–255), `fan1_input` reads RPM. The PWM channels belong to the driver, so they cannot be exported through `/sys/class/pwm`. Fans start at `pwm1` = 0 with the output off: `config.txt` holds the pins low from the firmware stage on, and `cooling-levels = <0>` stops `pwm-fan` from probing at full speed.
+
 ## Minecraft accounts
 
 To get a proper shell for a Minecraft account (real login session, correct `XDG_RUNTIME_DIR`, works even without an SSH key set up for that user), use `machinectl shell <user>@`.

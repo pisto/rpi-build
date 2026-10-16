@@ -1,0 +1,63 @@
+// Two 4-pin fans on PWM0, each with its tachometer, as pwm-fan hwmon devices.
+// Written against the mainline bcm2711 DT labels, applied by U-Boot (boot-fdt-fixups.txt).
+//
+// header pin  GPIO  signal
+//         31     6  fan0 tach
+//         32    12  fan0 PWM (PWM0_0, alt0)
+//         33    13  fan1 PWM (PWM0_1, alt0)
+//         34     -  GND
+//         35    19  fan1 tach
+//
+// The fans start stopped: pwm-fan probes at its highest cooling level (255 without any), so
+// a single level of 0 makes it leave the PWM off. Before the driver loads, config.txt
+// gpio=12,13=op,dl holds the pins low, since 4-pin fans run at full speed on a floating input.
+//
+// Tach outputs are open collector: the internal ~50k pull-up to 3.3V is enough for short
+// wires, never pull them up to the fan's 12V/5V.
+
+/dts-v1/;
+/plugin/;
+
+&gpio {
+	fan0_tach: fan0-tach-gpio6 {
+		pins = "gpio6";
+		function = "gpio_in";
+		bias-pull-up;
+	};
+
+	fan1_tach: fan1-tach-gpio19 {
+		pins = "gpio19";
+		function = "gpio_in";
+		bias-pull-up;
+	};
+};
+
+&pwm {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm0_0_gpio12 &pwm0_1_gpio13>;
+	status = "okay";
+};
+
+&{/} {
+	fan0: fan-0 {
+		compatible = "pwm-fan";
+		// channel 0, 40000ns = 25kHz, normal polarity
+		pwms = <&pwm 0 40000 0>;
+		// 2 = IRQ_TYPE_EDGE_FALLING
+		interrupts-extended = <&gpio 6 2>;
+		pulses-per-revolution = <2>;
+		cooling-levels = <0>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&fan0_tach>;
+	};
+
+	fan1: fan-1 {
+		compatible = "pwm-fan";
+		pwms = <&pwm 1 40000 0>;
+		interrupts-extended = <&gpio 19 2>;
+		pulses-per-revolution = <2>;
+		cooling-levels = <0>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&fan1_tach>;
+	};
+};

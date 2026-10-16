@@ -27,6 +27,9 @@ RUN printf '\n[pi4]\ncore_freq=250\n[all]\n' >> /boot/config.txt \
   && grep -q '^core_freq=250$' /boot/config.txt
 RUN printf '\n[pi4]\narm_freq=1800\n[all]\n' >> /boot/config.txt \
   && grep -q '^arm_freq=1800$' /boot/config.txt
+# fan PWM pins low from the firmware on, until pwm-fan takes them (rpi-fans.dts)
+RUN printf '\n[pi4]\ngpio=12,13=op,dl\n[all]\n' >> /boot/config.txt \
+  && grep -q '^gpio=12,13=op,dl$' /boot/config.txt
 # power: scale the cpu on demand instead of pinning it at max, and power down the onboard radios
 COPY cpu-governor.conf /etc/tmpfiles.d/
 COPY no-wireless.conf /etc/modprobe.d/
@@ -123,4 +126,10 @@ RUN --mount=type=cache,id=pacman-$RPI_ARCH,target=/var/cache/pacman/pkg \
     pacman -Sy --noconfirm --disable-sandbox --overwrite '*' linux-aarch64 uboot-tools \
     && (cd /boot && ./mkscr); \
   fi; \
-  pacman -Syu --noconfirm --disable-sandbox --overwrite '*' jdk-openjdk jq ddclient libnatpmp perf wireguard-tools nftables btrfs-progs
+  pacman -Syu --noconfirm --disable-sandbox --overwrite '*' jdk-openjdk jq ddclient libnatpmp perf wireguard-tools nftables btrfs-progs dtc
+
+# [rpi4] fans on PWM0 with tachometers, overlay applied by U-Boot (see boot-fdt-fixups.txt)
+RUN --mount=type=bind,source=rpi-fans.dts,target=/tmp/rpi-fans.dts \
+  if [ "$RPI_ARCH" = aarch64 ]; then \
+    mkdir -p /boot/overlays && dtc -@ -I dts -O dtb -o /boot/overlays/rpi-fans.dtbo /tmp/rpi-fans.dts; \
+  fi

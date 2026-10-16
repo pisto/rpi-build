@@ -8,3 +8,9 @@
     # properties across. Guarded as one chain: a failure must not stop the boot.
     if fdt addr ${fdt_addr} && fdt get value fw_rev /system linux,revision && fdt get value fw_blts /chosen/bootloader build-timestamp && fdt addr ${fdt_addr_r} && fdt resize 4096 && fdt mknode / system && fdt set /system linux,revision <${fw_rev}> && fdt mknode /chosen bootloader && fdt set /chosen/bootloader build-timestamp <${fw_blts}>; then echo "copied firmware board info into kernel FDT"; else echo "WARNING: failed to copy firmware board info into kernel FDT"; fi
     fdt addr ${fdt_addr_r}
+    # Same reason, config.txt dtoverlay= never reaches the kernel: apply our overlays here.
+    # A failed fdt apply poisons the target tree, so apply to a copy in the free 3MB below
+    # fdt_addr_r and only switch to it on success. The overlay is staged at ramdisk_addr_r,
+    # which is not loaded until below (this U-Boot env has no fdtoverlay_addr_r).
+    if load ${devtype} ${devnum}:${bootpart} ${ramdisk_addr_r} /overlays/rpi-fans.dtbo && fdt move ${fdt_addr_r} ${pxefile_addr_r} 0x100000 && fdt apply ${ramdisk_addr_r}; then setenv fdt_addr_r ${pxefile_addr_r}; echo "applied overlay rpi-fans"; else echo "WARNING: failed to apply overlay rpi-fans"; fi
+    fdt addr ${fdt_addr_r}
